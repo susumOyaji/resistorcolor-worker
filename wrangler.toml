@@ -1,0 +1,12 @@
+name = "resistorcolor-worker"
+main = "src/index.js"
+compatibility_date = "2023-10-25"
+
+# Serve static assets from the public directory
+assets = { directory = "./public", binding = "ASSETS" }
+
+# KV namespace for storing learned color definitions
+[[kv_namespaces]]
+binding = "LEARNING_STORE"
+id = "5dc36ef7b37a69500bd080cb310ba2ce" # TODO: Wrangler deploy時に生成されるIDをここに設定してください
+preview_id = "" # TODO: プレビュー用のKV ID

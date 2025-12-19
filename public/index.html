@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Resistor Color Extractor</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.css">
+    <link rel="stylesheet" href="style.css?v=5">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+
+<body>
+    <div class="background-blobs">
+        <div class="blob blob-1"></div>
+        <div class="blob blob-2"></div>
+        <div class="blob blob-3"></div>
+    </div>
+
+    <main class="app-container">
+        <header class="app-header">
+            <div class="logo">
+                <i class="fa-solid fa-wave-square"></i>
+                <h1>Resistor Color Extractor</h1>
+            </div>
+            <p class="subtitle">抵抗器のカラーコード抽出・デバッグツール</p>
+        </header>
+
+        <section class="upload-section" id="drop-zone">
+            <input type="file" id="file-input" accept="image/*" hidden>
+            <div class="upload-content">
+                <div class="icon-wrapper"><i class="fa-solid fa-cloud-arrow-up"></i></div>
+                <h3>画像をドラッグ＆ドロップ</h3>
+                <p>または <span class="browse-btn">ファイルを選択</span></p>
+            </div>
+        </section>
+
+        <section class="analysis-section hidden" id="analysis-section">
+            <div class="preview-column">
+                <div class="image-controls">
+                    <button id="change-image-btn" class="secondary-btn"><i class="fa-solid fa-image"></i>
+                        別の画像を選択</button>
+                    <button id="reset-crop-btn" class="secondary-btn" style="margin-left: 0.5rem;"><i
+                            class="fa-solid fa-expand"></i> 範囲リセット</button>
+                    <button id="auto-crop-btn" class="secondary-btn" style="margin-left: 0.5rem;"><i
+                            class="fa-solid fa-crop-simple"></i> 自動クロップ</button>
+                </div>
+                <div class="images-row" style="display: flex; gap: 1rem; flex-wrap: wrap; justify-content: center;">
+                    <div class="image-preview-container" style="position: relative; flex: 1; min-width: 300px;">
+                        <img id="image-preview" src="" alt="Preview">
+                    </div>
+                    <!-- Moved Edge Detected Image Here -->
+                    <div id="edge-image-container"
+                        style="display: none; text-align: center; flex: 1; min-width: 300px;">
+                        <div
+                            style="display: inline-block; position: relative; border-radius: 8px; overflow: hidden; border: 2px solid rgba(245, 158, 11, 0.5);">
+                            <img id="edge-analyzed-image"
+                                style="display: block; max-height: 400px; max-width: 100%; height: auto; width: auto;">
+                            <div id="edge-overlay"
+                                style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: block;">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="results-container">
+                <!-- Edge Detection Section -->
+                <div class="section-title">
+
+                    <div style="display: flex; gap: 1rem; align-items: center; width: 100%; flex-wrap: wrap;">
+                        <button id="edge-detect-btn" class="analyze-btn"
+                            style="flex: 1; min-width: 200px; justify-content: center; margin: 0; padding: 0.75rem 1rem; font-size: 1rem; background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);">
+                            <i class="fa-solid fa-wave-square"></i> バンド検出
+                        </button>
+
+                        <div class="controls"
+                            style="flex: 1; min-width: 250px; display: flex; align-items: center; gap: 0.5rem; justify-content: space-between; box-sizing: border-box;">
+                            <label for="edge-threshold-slider"
+                                style="font-size: 0.9rem; color: var(--text-primary); white-space: nowrap;">検出感度:</label>
+                            <div style="display: flex; align-items: center; gap: 0.5rem; flex-grow: 1;">
+                                <button id="threshold-decrement-btn" class="fine-tune-btn">-</button>
+                                <input type="range" id="edge-threshold-slider" min="1" max="30" value="10" step="1"
+                                    style="flex-grow: 1; min-width: 80px;">
+                                <button id="threshold-increment-btn" class="fine-tune-btn">+</button>
+                                <span id="edge-threshold-value"
+                                    style="font-size: 0.9rem; color: var(--text-secondary); width: 24px; text-align: center;">10</span>
+                            </div>
+                        </div>
+
+                        <div style="display: flex; flex-direction: column; gap: 0.8rem; width: 100%;">
+                            <label class="switch"
+                                style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                                <input type="checkbox" id="edge-learning-mode-toggle">
+                                <span class="slider round"></span>
+                                <span style="font-size: 0.9rem; color: var(--text-primary);">Learning Mode</span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Edge Learning Input Area -->
+                <div id="edge-learning-input-area"
+                    style="margin-top: 1rem; padding: 1rem; background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 8px; display: none;">
+                    <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+                        <span style="font-size: 0.9rem; color: #e2e8f0;">正解の抵抗値:</span>
+                        <input type="text" id="edge-correct-resistance-input" placeholder="ex: 12k, 270"
+                            style="background: rgba(0, 0, 0, 0.3); border: 1px solid var(--glass-border); color: white; padding: 0.4rem 0.8rem; border-radius: 4px; width: 100px;">
+
+                        <select id="edge-correct-tolerance-select"
+                            style="background: rgba(0, 0, 0, 0.3); border: 1px solid var(--glass-border); color: white; padding: 0.4rem; border-radius: 4px;">
+                            <option value="5">±5% (Gold)</option>
+                            <option value="10">±10% (Silver)</option>
+                            <option value="1">±1% (Brown)</option>
+                            <option value="2">±2% (Red)</option>
+                            <option value="0.5">±0.5% (Green)</option>
+                            <option value="0.25">±0.25% (Blue)</option>
+                            <option value="0.1">±0.1% (Violet)</option>
+                            <option value="20">±20% (None)</option>
+                        </select>
+
+                        <button id="edge-learn-from-value-btn" class="secondary-btn"
+                            style="background: #f59e0b; border: none; color: white; font-weight: 600;">
+                            <i class="fa-solid fa-graduation-cap"></i> 値から学習
+                        </button>
+                        <span id="edge-learning-status"
+                            style="font-size: 0.85rem; color: #4ade80; margin-left: 0.5rem;"></span>
+                    </div>
+                    <div style="margin-top: 0.5rem; font-size: 0.8rem; color: #94a3b8;">
+                        ※検出されたバンドの色を、入力値に対応するカラーコードとして登録します。</div>
+                </div>
+
+
+
+                <div id="edge-result"
+                    style="margin-top: 1rem; padding: 1rem; background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 12px; display: none;">
+                    <h3 style="margin-bottom: 0.5rem; font-size: 1.1rem; color: #fbbf24;">Detection Result</h3>
+                    <div id="edge-resistor-value" style="font-size: 2rem; font-weight: 700; color: #f59e0b;"></div>
+                    <div id="edge-detected-bands"
+                        style="margin-top: 0.5rem; font-size: 0.9rem; color: var(--text-muted);"></div>
+                    <div id="edge-visualization" style="margin-top: 1rem; display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                    </div>
+                </div>
+
+                <!-- Raw Worker Response Debug Panel -->
+                <div id="raw-response-panel" style="margin-top: 1rem; display: none;">
+                    <div class="debug-panel-header"
+                        style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 1rem; background: rgba(99, 102, 241, 0.1); border: 1px solid rgba(99, 102, 241, 0.3); border-radius: 8px 8px 0 0; cursor: pointer;"
+                        onclick="toggleRawResponse()">
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <i class="fa-solid fa-code" style="color: #818cf8;"></i>
+                            <h3 style="font-size: 1rem; color: #818cf8; margin: 0;">Raw Worker Response</h3>
+                        </div>
+                        <i id="raw-response-toggle-icon" class="fa-solid fa-chevron-down"
+                            style="color: #818cf8; transition: transform 0.3s;"></i>
+                    </div>
+                    <div id="raw-response-content"
+                        style="max-height: 0; overflow: hidden; transition: max-height 0.3s ease-out;">
+                        <div
+                            style="padding: 1rem; background: rgba(0, 0, 0, 0.3); border: 1px solid rgba(99, 102, 241, 0.3); border-top: none; border-radius: 0 0 8px 8px;">
+                            <!-- Request Info -->
+                            <div style="margin-bottom: 1rem;">
+                                <div
+                                    style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                                    <h4 style="font-size: 0.9rem; color: #a5b4fc; margin: 0;">Request</h4>
+                                    <button onclick="copyToClipboard('raw-request-data')" class="copy-btn"
+                                        style="background: rgba(99, 102, 241, 0.2); border: 1px solid rgba(99, 102, 241, 0.5); color: #a5b4fc; padding: 0.25rem 0.5rem; border-radius: 4px; cursor: pointer; font-size: 0.75rem;">
+                                        <i class="fa-solid fa-copy"></i> Copy
+                                    </button>
+                                </div>
+                                <pre id="raw-request-data"
+                                    style="background: rgba(0, 0, 0, 0.5); padding: 0.75rem; border-radius: 4px; overflow-x: auto; font-size: 0.75rem; color: #e0e7ff; margin: 0; font-family: 'Courier New', monospace; max-height: 200px; overflow-y: auto;"></pre>
+                            </div>
+
+                            <!-- Response Info -->
+                            <div>
+                                <div
+                                    style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                                    <h4 style="font-size: 0.9rem; color: #a5b4fc; margin: 0;">Response</h4>
+                                    <button onclick="copyToClipboard('raw-response-data')" class="copy-btn"
+                                        style="background: rgba(99, 102, 241, 0.2); border: 1px solid rgba(99, 102, 241, 0.5); color: #a5b4fc; padding: 0.25rem 0.5rem; border-radius: 4px; cursor: pointer; font-size: 0.75rem;">
+                                        <i class="fa-solid fa-copy"></i> Copy
+                                    </button>
+                                </div>
+                                <pre id="raw-response-data"
+                                    style="background: rgba(0, 0, 0, 0.5); padding: 0.75rem; border-radius: 4px; overflow-x: auto; font-size: 0.75rem; color: #e0e7ff; margin: 0; font-family: 'Courier New', monospace; max-height: 300px; overflow-y: auto;"></pre>
+                            </div>
+
+                            <!-- Response Metadata -->
+                            <div
+                                style="margin-top: 1rem; padding: 0.75rem; background: rgba(99, 102, 241, 0.05); border-radius: 4px;">
+                                <div
+                                    style="display: grid; grid-template-columns: auto 1fr; gap: 0.5rem; font-size: 0.8rem;">
+                                    <span style="color: #94a3b8;">Status:</span>
+                                    <span id="response-status" style="color: #4ade80; font-weight: 600;"></span>
+
+                                    <span style="color: #94a3b8;">Endpoint:</span>
+                                    <span id="response-endpoint" style="color: #e0e7ff; font-family: monospace;"></span>
+
+                                    <span style="color: #94a3b8;">Timestamp:</span>
+                                    <span id="response-timestamp" style="color: #e0e7ff;"></span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <div class="toast" id="toast"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.js"></script>
+    <script src="app.js?v=6"></script>
+    <script src="learning.js"></script>
+</body>
+
+</html>
