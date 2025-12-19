@@ -123,7 +123,7 @@ async function handleScan(request, env) {
         }
 
         const sliceResults = slices.map(slicePixels => {
-            const bands = extractBands(slicePixels, slicePixels.length, 1, customColors);
+            const bands = extractBands(slicePixels, slicePixels.length, 1, 10, customColors);
             return {
                 colors: bands.map(b => ({
                     r: b.rgb.r,
@@ -137,15 +137,32 @@ async function handleScan(request, env) {
             };
         });
 
-        // Aggregate results to find the most common sequence of value bands
-        const allBandSequences = sliceResults.map(res => {
-            const colorObjs = res.detected_bands.map(name => RESISTOR_COLORS.find(c => c.name === name)).filter(Boolean);
-            const dominantColor = findDominantColor(colorObjs);
-            return colorObjs.filter(band => band.name !== dominantColor).map(band => band.name);
+        // --- Improved Body Filtering using Width ---
+        const allProcessedSequences = sliceResults.map(res => {
+            const bands = res.colors;
+
+            // 1. Always filter out explicit body colors by name (case-insensitive + partial match)
+            const withoutBeige = bands.filter(b => {
+                const n = b.name.toLowerCase();
+                return !n.includes('body') && !n.includes('beige');
+            });
+            if (withoutBeige.length < 3) return [];
+
+            // 2. Then apply width-based filtering on the remaining bands
+            const widths = withoutBeige.map(b => b.count).sort((a, b) => a - b);
+            const medianWidth = widths[Math.floor(widths.length / 2)];
+            const maxWidth = widths[widths.length - 1];
+
+            // If a band is significantly wider than the median (e.g., > 2.5x), treat it as body
+            const bodyColorName = (maxWidth > medianWidth * 2.5)
+                ? withoutBeige.find(b => b.count === maxWidth).name
+                : null;
+
+            return withoutBeige.filter(b => b.name !== bodyColorName).map(b => b.name);
         });
 
         const sequenceCounts = {};
-        allBandSequences.forEach(seq => {
+        allProcessedSequences.forEach(seq => {
             if (seq.length >= 3) {
                 const key = seq.join(',');
                 sequenceCounts[key] = (sequenceCounts[key] || 0) + 1;
@@ -198,13 +215,22 @@ async function handleExtractColors(request, env) {
 
         // Find and filter out the dominant color (body color) before calculation
         const colorObjs = bandNames.map(name => RESISTOR_COLORS.find(c => c.name === name)).filter(Boolean);
-        const dominantColorName = findDominantColor(colorObjs);
-        const filteredBandNames = bandNames.filter(name => name !== dominantColorName);
 
+        // --- Improved Body Filtering for API Response ---
+        // Filter out 'Beige (Body)' and any extremely dominant color by frequency/count
+        const totalPixels = pixels.length;
+        const filteredEnrichedColors = enrichedColors.filter(c => {
+            if (c.name === 'Beige (Body)') return false;
+            // If one color takes up more than 70% of the sample, it's likely background/body
+            if (c.count > totalPixels * 0.7) return false;
+            return true;
+        });
+
+        const filteredBandNames = filteredEnrichedColors.map(c => c.name);
         const resistorValue = calculateResistorValue(filteredBandNames);
 
         return new Response(JSON.stringify({
-            colors: enrichedColors.map(c => ({
+            colors: filteredEnrichedColors.map(c => ({
                 r: c.rgb.r,
                 g: c.rgb.g,
                 b: c.rgb.b,
@@ -214,7 +240,7 @@ async function handleExtractColors(request, env) {
                 avgX: c.avgX
             })),
             totalPixels: pixels.length,
-            detected_bands: bandNames,
+            detected_bands: filteredBandNames,
             resistor_value: resistorValue
         }), { headers: { 'Content-Type': 'application/json' } });
 
@@ -625,17 +651,34 @@ async function handleEdgeDetection(request, env) {
         const bands = extractBands(pixels, width, height, threshold, customColors);
         const bandNames = bands.map(b => b.colorName);
 
-        // Find and filter out the dominant color (body color) before calculation
-        const colorObjs = bandNames.map(name => RESISTOR_COLORS.find(c => c.name === name)).filter(Boolean);
-        const dominantColorName = findDominantColor(colorObjs);
-        const filteredBandNames = bandNames.filter(name => name !== dominantColorName);
+        // --- Improved Body Filtering using Width & Name ---
+        // 1. Always filter out explicit body colors (case-insensitive + partial match)
+        let filteredBands = bands.filter(b => {
+            const n = b.colorName.toLowerCase();
+            return !n.includes('body') && !n.includes('beige');
+        });
 
+        // 2. Then apply width-based filtering if there are still enough bands
+        if (filteredBands.length >= 3) {
+            const widths = filteredBands.map(b => b.width).sort((a, b) => a - b);
+            const medianWidth = widths[Math.floor(widths.length / 2)];
+            const maxWidth = widths[widths.length - 1];
+
+            // If a band is > 2.5x the median width, assume it's the body/background
+            const bodyThreshold = medianWidth * 2.5;
+            if (maxWidth > bodyThreshold) {
+                const bodyColor = filteredBands.find(b => b.width === maxWidth).colorName;
+                filteredBands = filteredBands.filter(b => b.colorName !== bodyColor);
+            }
+        }
+
+        const filteredBandNames = filteredBands.map(b => b.colorName);
         const resistorValue = calculateResistorValue(filteredBandNames);
 
         return new Response(JSON.stringify({
             success: true,
-            bands: bands,
-            detected_bands: bandNames, // Return original bands for UI transparency
+            bands: filteredBands, // Show only filtered bands in the UI
+            detected_bands: filteredBandNames,
             resistor_value: resistorValue
         }), { headers: { 'Content-Type': 'application/json' } });
     } catch (e) {

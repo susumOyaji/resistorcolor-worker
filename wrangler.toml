@@ -8,5 +8,5 @@ assets = { directory = "./public", binding = "ASSETS" }
 # KV namespace for storing learned color definitions
 [[kv_namespaces]]
 binding = "LEARNING_STORE"
-id = "5dc36ef7b37a69500bd080cb310ba2ce" # TODO: Wrangler deploy時に生成されるIDをここに設定してください
-preview_id = "" # TODO: プレビュー用のKV ID
+id = "5cf5788ef3b645e1b0f544d2abe6b8cb"
+preview_id = ""
