@@ -104,17 +104,22 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    const edgeLearningModeToggle = document.getElementById('edge-learning-mode-toggle');
+    const edgeLearningModeToggle = document.getElementById('edgeLearning-mode-toggle');
     const edgeLearningModeButton = document.getElementById('edge-learning-mode-button');
     const edgeLearningInputArea = document.getElementById('edge-learning-input-area');
 
     // Function to update the UI based on toggle state
     const updateLearningModeUI = () => {
+        if (!edgeLearningModeToggle) return;
         const isChecked = edgeLearningModeToggle.checked;
+        const container = edgeLearningInputArea;
         if (isChecked) {
-            edgeLearningInputArea.style.display = 'block';
+            container.style.display = 'block';
+            container.classList.add('learning-mode-active-container');
+            container.style.animation = 'fadeIn 0.3s ease-out';
         } else {
-            edgeLearningInputArea.style.display = 'none';
+            container.style.display = 'none';
+            container.classList.remove('learning-mode-active-container');
         }
     };
 
@@ -403,7 +408,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <option value="Violet">Violet</option>
                     <option value="Gray">Gray</option>
                     <option value="White">White</option>
-                    <option value="Beige(body)">Beige(body)</option>
+                    <option value="Beige (Body)">Beige (Body)</option>
                     <option value="Gold">Gold</option>
                     <option value="Silver">Silver</option>
                 </select>

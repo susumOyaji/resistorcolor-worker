@@ -606,6 +606,83 @@ input:checked+.slider:before {
     display: none;
 }
 
+/* Premium Learning Mode Toggle Switch */
+.switch {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    cursor: pointer;
+    padding: 6px 12px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--glass-border);
+    border-radius: 50px;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.switch:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(245, 158, 11, 0.3);
+}
+
+.switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+    position: absolute;
+}
+
+.slider {
+    position: relative;
+    width: 44px;
+    height: 22px;
+    background-color: rgba(255, 255, 255, 0.1);
+    border-radius: 22px;
+    transition: .4s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.slider:before {
+    position: absolute;
+    content: "";
+    height: 16px;
+    width: 16px;
+    left: 3px;
+    bottom: 3px;
+    background-color: white;
+    transition: .4s cubic-bezier(0.4, 0, 0.2, 1);
+    border-radius: 50%;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+input:checked + .slider {
+    background: linear-gradient(135deg, #f59e0b, #d97706);
+    box-shadow: 0 0 15px rgba(245, 158, 11, 0.4);
+}
+
+input:checked + .slider:before {
+    transform: translateX(22px);
+    background-color: #fff;
+}
+
+.learning-mode-text {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    transition: color 0.3s ease;
+}
+
+input:checked ~ .learning-mode-text {
+    color: #fbbf24;
+    text-shadow: 0 0 8px rgba(245, 158, 11, 0.3);
+}
+
+/* Container Highlight when Learning Mode is On */
+.learning-mode-active-container {
+    border-color: #f59e0b !important;
+    background: rgba(245, 158, 11, 0.05) !important;
+}
+
 
 /* Modal styles */
 .modal {

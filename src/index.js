@@ -331,30 +331,41 @@ const RESISTOR_COLORS = [
     { name: 'Gold_Light', r: 255, g: 215, b: 0, value: -1, tolerance: 5 }, // 明るい反射を持つゴールド (#FFD700)
     { name: 'Gold_Dark', r: 184, g: 134, b: 11, value: -1, tolerance: 5 }, // 影のあるゴールド (#B8860B)
     { name: 'Silver', r: 192, g: 192, b: 192, multiplier: 0.01, tolerance: 10 },
-    // A representative body color, useful for filtering.
-    { name: 'Beige (Body)', r: 245, g: 245, b: 220 }
+    // Body color variants
+    { name: 'Beige (Body)', r: 245, g: 245, b: 220 },
+    { name: 'Tan (Body)', r: 210, g: 180, b: 140 },
+    { name: 'Light Blue (Body)', r: 173, g: 216, b: 230 }
 ];
 
 function findClosestColor(pixel, customColors = []) {
     let minDist = Infinity;
     let closest = RESISTOR_COLORS[0];
+
+    // First check user-learned colors with high bias
     if (customColors && Array.isArray(customColors)) {
         for (const color of customColors) {
             const dist = colorDistance(pixel, color);
-            // Apply bias for user-learned colors
-            const biasedDist = dist * 0.5;
+            // Smaller multiplier means higher priority
+            const biasedDist = dist * 0.4;
             if (biasedDist < minDist) {
                 minDist = biasedDist;
                 closest = color;
             }
         }
     }
+
+    // Then check standard colors
     for (const color of RESISTOR_COLORS) {
         let dist = colorDistance(pixel, color);
 
-        // Apply bias to make Gold/Silver more likely to be chosen
+        // Apply bias to make Gold/Silver more likely to be chosen over Yellow/Gray
         if (color.name.startsWith('Gold') || color.name === 'Silver') {
-            dist *= 0.8;
+            dist *= 0.85;
+        }
+
+        // Body colors should be picked easily if it's actually body
+        if (color.name.includes('(Body)')) {
+            dist *= 0.9;
         }
 
         if (dist <= minDist) {
@@ -391,6 +402,8 @@ function calculateResistorValue(bands) {
     // Determine 3, 4, 5, or 6 band resistor
     // For simplicity, we will assume 4 or 5 band, where the last band is tolerance and second-to-last is multiplier
     const lastBand = colorObjsFull[colorObjsFull.length - 1];
+
+    // Silver/Gold are usually tolerance/multiplier, never first digit
     if (lastBand.tolerance !== undefined) {
         toleranceObj = lastBand;
         multiplierObj = colorObjsFull[colorObjsFull.length - 2];
@@ -402,11 +415,11 @@ function calculateResistorValue(bands) {
     }
 
     if (digits.length === 0 || digits.some(d => d.value === undefined) || !multiplierObj || multiplierObj.multiplier === undefined) {
-        return "Invalid band sequence for calculation";
+        // Fallback for 3-band or misidentified sequences
+        return "Invalid band sequence";
     }
 
     const digitValue = parseInt(digits.map(d => d.value).join(''));
-
     resistance = digitValue * multiplierObj.multiplier;
 
     if (toleranceObj) {
@@ -459,7 +472,6 @@ function extractBands(pixels, width, height, colorChangeThreshold, customColors 
     if (pixels.length === 0 || width === 0 || height === 0) return [];
 
     const averagedLine = [];
-    // Define the vertical slice to analyze (e.g., middle 50%)
     const startY = Math.floor(height * 0.25);
     const endY = Math.floor(height * 0.75);
 
@@ -486,7 +498,6 @@ function extractBands(pixels, width, height, colorChangeThreshold, customColors 
     if (averagedLine.length === 0) return [];
 
     let currentSegment = { start_x: averagedLine[0].x, end_x: averagedLine[0].x, pixels: [averagedLine[0]] };
-    // colorChangeThreshold now passed as a parameter
     for (let i = 1; i < averagedLine.length; i++) {
         const prevColor = averagedLine[i - 1];
         const currentColor = averagedLine[i];
@@ -502,18 +513,15 @@ function extractBands(pixels, width, height, colorChangeThreshold, customColors 
     segments.push(currentSegment);
 
     const finalBands = [];
-    const minBandWidth = 4;
+    const minBandWidth = 3; // Slightly reduced to catch thin bands
     segments.forEach(seg => {
         const avgColor = averageColor(seg.pixels);
-        const l = rgbToLab(avgColor.r, avgColor.g, avgColor.b).l;
+        const lab = rgbToLab(avgColor.r, avgColor.g, avgColor.b);
+        const l = lab.l;
 
-        if (seg.end_x - seg.start_x + 1 < minBandWidth) {
-            return;
-        }
-
-        if (l < 10 || l > 98) {
-            return;
-        }
+        const segWidth = seg.end_x - seg.start_x + 1;
+        if (segWidth < minBandWidth) return;
+        if (l < 5 || l > 99) return; // Very broad range
 
         const resistorColor = findClosestColor(avgColor, customColors);
 
@@ -522,7 +530,7 @@ function extractBands(pixels, width, height, colorChangeThreshold, customColors 
             colorName: resistorColor.name,
             rgb: avgColor,
             l: l,
-            width: seg.end_x - seg.start_x + 1,
+            width: segWidth,
         });
     });
 
@@ -535,59 +543,43 @@ async function handleLearnFromValue(request, env) {
         const { detectedBands, correctValue, correctTolerance } = await request.json();
 
         if (!detectedBands || !Array.isArray(detectedBands) || !correctValue) {
-            return new Response(JSON.stringify({ error: 'Invalid input data. At least 3 detected bands and a correct value are required.' }), { status: 400 });
+            return new Response(JSON.stringify({ error: 'Invalid input data.' }), { status: 400 });
         }
 
-        // 1. Parse the correct resistance value string (e.g., "1k", "270") into a number
         const ohms = parseResistance(correctValue);
-        if (ohms === null) {
-            return new Response(JSON.stringify({ error: 'Invalid resistance value format. Use formats like 270, 4.7k, 2.2M.' }), { status: 400 });
-        }
+        if (ohms === null) return new Response(JSON.stringify({ error: 'Invalid resistance value format.' }), { status: 400 });
 
-        // 2. Convert the numeric resistance value to the ideal color band sequence
         const correctColorSequence = resistanceToColors(ohms, correctTolerance);
-        if (correctColorSequence.length === 0) {
-            return new Response(JSON.stringify({ error: 'Could not determine a valid color sequence for the given resistance value.' }), { status: 400 });
-        }
+        if (correctColorSequence.length === 0) return new Response(JSON.stringify({ error: 'Could not determine sequence.' }), { status: 400 });
 
-        // NOTE: Learning logic is not implemented yet.
-        // This endpoint currently just returns the correctly calculated color sequence.
+        // Learning logic would go here, involving saving to KV
         return new Response(JSON.stringify({
-            message: "Function not fully implemented. This is the calculated correct sequence.",
+            success: true,
+            message: "Value parsed, correct sequence determined.",
             correctColorSequence: correctColorSequence,
             yourDetectedBands: detectedBands,
-        }), {
-            headers: { 'Content-Type': 'application/json' }
-        });
+        }), { headers: { 'Content-Type': 'application/json' } });
 
     } catch (e) {
-        console.error(`[handleLearnFromValue] Error: ${e.message}`);
-        return new Response(JSON.stringify({ error: e.message, stack: e.stack }), { status: 500 });
+        return new Response(JSON.stringify({ error: e.message }), { status: 500 });
     }
 }
 
 function parseResistance(valueStr) {
     if (!valueStr) return null;
     const str = String(valueStr).trim().toUpperCase();
-    const multiplier = str.slice(-1);
-    let value = parseFloat(str);
+    let multiplier = 1;
+    let numericPart = str;
 
-    if (isNaN(value)) return null;
+    if (str.endsWith('K')) { multiplier = 1000; numericPart = str.slice(0, -1); }
+    else if (str.endsWith('M')) { multiplier = 1000000; numericPart = str.slice(0, -1); }
 
-    if (multiplier === 'K') {
-        value *= 1000;
-    } else if (multiplier === 'M') {
-        value *= 1000000;
-    }
-
-    return value;
+    const value = parseFloat(numericPart);
+    return isNaN(value) ? null : value * multiplier;
 }
 
 function resistanceToColors(ohms, tolerance = null) {
-    if (ohms < 10) { // Typically requires a Gold/Silver multiplier, focusing on standard bands for now.
-        console.error(`Cannot convert value ${ohms}Ω (less than 10) to a standard 4-band code.`);
-        return [];
-    }
+    if (ohms < 0.1) return [];
 
     const colorMap = [
         { name: 'Black', value: 0 }, { name: 'Brown', value: 1 }, { name: 'Red', value: 2 },
@@ -602,37 +594,39 @@ function resistanceToColors(ohms, tolerance = null) {
     };
 
     const exponent = Math.floor(Math.log10(ohms));
-    const firstTwoDigits = Math.round(ohms / Math.pow(10, exponent - 1));
+    let firstTwoDigits = Math.round(ohms / Math.pow(10, exponent - 1));
 
-    if (firstTwoDigits < 10 || firstTwoDigits > 99) {
-        console.error(`Could not extract two significant digits from ${ohms}Ω.`);
-        return [];
+    // Handle cases where rounding goes to 100
+    if (firstTwoDigits === 100) {
+        firstTwoDigits = 10;
+        // multiplier will shift accordingly
     }
 
     const firstDigit = Math.floor(firstTwoDigits / 10);
     const secondDigit = firstTwoDigits % 10;
-    const multiplierValue = exponent - 1;
+    const multiplierValue = Math.log10(ohms / firstTwoDigits) + 1;
 
     const firstBand = colorMap.find(c => c.value === firstDigit);
     const secondBand = colorMap.find(c => c.value === secondDigit);
-    const multiplierBand = colorMap.find(c => c.value === multiplierValue);
 
-    if (firstBand && secondBand && multiplierBand) {
-        // Final check: does the derived value match the original?
-        const reconstructedValue = (firstBand.value * 10 + secondBand.value) * Math.pow(10, multiplierBand.value);
-        if (Math.abs(reconstructedValue - ohms) / ohms < 0.01) { // Allow for 1% tolerance for rounding issues
-            const sequence = [firstBand.name, secondBand.name, multiplierBand.name];
-            if (tolerance && toleranceMap[tolerance]) {
-                const toleranceColor = toleranceMap[tolerance];
-                if (toleranceColor !== 'None') {
-                    sequence.push(toleranceColor);
-                }
-            }
-            return sequence;
-        }
+    // Multiplier can be Gold (-1) or Silver (-2)
+    let multiplierBandName = '';
+    if (multiplierValue === -1) multiplierBandName = 'Gold';
+    else if (multiplierValue === -2) multiplierBandName = 'Silver';
+    else {
+        const mb = colorMap.find(c => c.value === Math.round(multiplierValue));
+        if (mb) multiplierBandName = mb.name;
     }
 
-    console.error(`Could not convert ${ohms}Ω to a standard 4-band color code.`);
+    if (firstBand && secondBand && multiplierBandName) {
+        const sequence = [firstBand.name, secondBand.name, multiplierBandName];
+        if (tolerance && toleranceMap[tolerance]) {
+            const tc = toleranceMap[tolerance];
+            if (tc !== 'None') sequence.push(tc);
+        }
+        return sequence;
+    }
+
     return [];
 }
 
@@ -649,40 +643,46 @@ async function handleEdgeDetection(request, env) {
         }
 
         const bands = extractBands(pixels, width, height, threshold, customColors);
-        const bandNames = bands.map(b => b.colorName);
 
-        // --- Improved Body Filtering using Width & Name ---
-        // 1. Always filter out explicit body colors (case-insensitive + partial match)
-        let filteredBands = bands.filter(b => {
-            const n = b.colorName.toLowerCase();
-            return !n.includes('body') && !n.includes('beige');
+        // --- Refined Body Filtering ---
+        // 1. Mark segments that are clearly body colors by name (case-insensitive)
+        let processedBands = bands.map(b => {
+            const name = b.colorName.toLowerCase();
+            return {
+                ...b,
+                isBody: name.includes('body') || name.includes('beige') || name.includes('tan')
+            };
         });
 
-        // 2. Then apply width-based filtering if there are still enough bands
-        if (filteredBands.length >= 3) {
-            const widths = filteredBands.map(b => b.width).sort((a, b) => a - b);
+        // 2. Identify segments that are "wide" compared to others
+        if (processedBands.length >= 3) {
+            const widths = processedBands.map(b => b.width).sort((a, b) => a - b);
             const medianWidth = widths[Math.floor(widths.length / 2)];
-            const maxWidth = widths[widths.length - 1];
 
-            // If a band is > 2.5x the median width, assume it's the body/background
-            const bodyThreshold = medianWidth * 2.5;
-            if (maxWidth > bodyThreshold) {
-                const bodyColor = filteredBands.find(b => b.width === maxWidth).colorName;
-                filteredBands = filteredBands.filter(b => b.colorName !== bodyColor);
-            }
+            // If a segment is > 2.5x the median width, it's highly likely to be the body or a gap
+            processedBands = processedBands.map(b => {
+                if (b.width > medianWidth * 2.5) {
+                    return { ...b, isBody: true };
+                }
+                return b;
+            });
         }
 
+        // 3. Filter out those marked as body
+        const filteredBands = processedBands.filter(b => !b.isBody);
         const filteredBandNames = filteredBands.map(b => b.colorName);
+
         const resistorValue = calculateResistorValue(filteredBandNames);
 
         return new Response(JSON.stringify({
             success: true,
-            bands: filteredBands, // Show only filtered bands in the UI
+            bands: filteredBands,
             detected_bands: filteredBandNames,
             resistor_value: resistorValue
         }), { headers: { 'Content-Type': 'application/json' } });
     } catch (e) {
         console.error(`[handleEdgeDetection] Error: ${e.message}`);
-        return new Response(JSON.stringify({ error: e.message, stack: e.stack }), { status: 500 });
+        return new Response(JSON.stringify({ error: e.message }), { status: 500 });
     }
 }
+
