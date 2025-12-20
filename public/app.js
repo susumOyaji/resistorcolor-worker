@@ -234,7 +234,7 @@ document.addEventListener('DOMContentLoaded', () => {
             pixels.push({ r: imageData.data[i], g: imageData.data[i + 1], b: imageData.data[i + 2] });
         }
 
-        const threshold = edgeThresholdSlider ? parseInt(edgeThresholdSlider.value, 10) : 10;
+        const threshold = edgeThresholdSlider ? parseInt(edgeThresholdSlider.value, 10) : 1;
 
         // Prepare request data
         const requestData = { pixels, width: canvas.width, height: canvas.height, threshold };

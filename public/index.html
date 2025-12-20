@@ -83,21 +83,19 @@
                                 style="font-size: 0.9rem; color: var(--text-primary); white-space: nowrap;">検出感度:</label>
                             <div style="display: flex; align-items: center; gap: 0.5rem; flex-grow: 1;">
                                 <button id="threshold-decrement-btn" class="fine-tune-btn">-</button>
-                                <input type="range" id="edge-threshold-slider" min="1" max="30" value="10" step="1"
+                                <input type="range" id="edge-threshold-slider" min="1" max="30" value="1" step="1"
                                     style="flex-grow: 1; min-width: 80px;">
                                 <button id="threshold-increment-btn" class="fine-tune-btn">+</button>
                                 <span id="edge-threshold-value"
-                                    style="font-size: 0.9rem; color: var(--text-secondary); width: 24px; text-align: center;">10</span>
+                                    style="font-size: 0.9rem; color: var(--text-secondary); width: 24px; text-align: center;">1</span>
                             </div>
                         </div>
 
-                        <div style="display: flex; flex-direction: column; gap: 0.8rem; width: 100%;">
-                                <label class="switch" id="learning-toggle-wrapper">
-                                    <input type="checkbox" id="edgeLearning-mode-toggle">
-                                    <span class="slider round"></span>
-                                    <span class="learning-mode-text">Learning Mode</span>
-                                </label>
-                        </div>
+                        <label class="switch" id="learning-toggle-wrapper" style="flex: 0 0 auto;">
+                            <input type="checkbox" id="edgeLearning-mode-toggle">
+                            <span class="slider round"></span>
+                            <span class="learning-mode-text">Learning Mode</span>
+                        </label>
                     </div>
                 </div>
 

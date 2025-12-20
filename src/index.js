@@ -328,8 +328,10 @@ const RESISTOR_COLORS = [
     { name: 'Gray', r: 128, g: 128, b: 128, value: 8, multiplier: 100000000, tolerance: 0.05 },
     { name: 'White', r: 255, g: 255, b: 255, value: 9, multiplier: 1000000000 },
     { name: 'Gold', r: 255, g: 215, b: 0, multiplier: 0.1, tolerance: 5 },
-    { name: 'Gold_Light', r: 255, g: 215, b: 0, value: -1, tolerance: 5 }, // 明るい反射を持つゴールド (#FFD700)
-    { name: 'Gold_Dark', r: 184, g: 134, b: 11, value: -1, tolerance: 5 }, // 影のあるゴールド (#B8860B)
+    { name: 'Gold_Light', r: 255, g: 220, b: 100, value: -1, tolerance: 5 }, // 反射で白飛び気味のゴールド
+    { name: 'Gold_Metallic', r: 212, g: 175, b: 55, value: -1, tolerance: 5 }, // メタリックな質感
+    { name: 'Gold_Dark', r: 184, g: 134, b: 11, value: -1, tolerance: 5 }, // 影の部分
+    { name: 'Gold_Ochre', r: 204, g: 119, b: 34, value: -1, tolerance: 5 }, // 黄土色に近いゴールド
     { name: 'Silver', r: 192, g: 192, b: 192, multiplier: 0.01, tolerance: 10 },
     // Body color variants
     { name: 'Beige (Body)', r: 245, g: 245, b: 220 },
@@ -358,9 +360,11 @@ function findClosestColor(pixel, customColors = []) {
     for (const color of RESISTOR_COLORS) {
         let dist = colorDistance(pixel, color);
 
-        // Apply bias to make Gold/Silver more likely to be chosen over Yellow/Gray
-        if (color.name.startsWith('Gold') || color.name === 'Silver') {
-            dist *= 0.85;
+        // Apply strong bias to make Gold/Silver more likely to be chosen over Yellow/Gray
+        if (color.name.startsWith('Gold')) {
+            dist *= 0.65; // ゴールドの判定を強く優先
+        } else if (color.name === 'Silver') {
+            dist *= 0.8;
         }
 
         // Body colors should be picked easily if it's actually body
@@ -475,6 +479,9 @@ function extractBands(pixels, width, height, colorChangeThreshold, customColors 
     const startY = Math.floor(height * 0.25);
     const endY = Math.floor(height * 0.75);
 
+
+
+
     for (let x = 0; x < width; x++) {
         let sumR = 0, sumG = 0, sumB = 0;
         let count = 0;
@@ -513,17 +520,36 @@ function extractBands(pixels, width, height, colorChangeThreshold, customColors 
     segments.push(currentSegment);
 
     const finalBands = [];
-    const minBandWidth = 3; // Slightly reduced to catch thin bands
-    segments.forEach(seg => {
+    const minBandWidth = 3;
+
+    // 全セグメントの幅の統計を先に取る（後のフィルタリング用）
+    const allWidths = segments.map(s => s.end_x - s.start_x + 1).filter(w => w >= minBandWidth);
+    const medianWidth = allWidths.length > 0 ? allWidths.sort((a, b) => a - b)[Math.floor(allWidths.length / 2)] : 10;
+
+    segments.forEach((seg, index) => {
         const avgColor = averageColor(seg.pixels);
         const lab = rgbToLab(avgColor.r, avgColor.g, avgColor.b);
         const l = lab.l;
-
         const segWidth = seg.end_x - seg.start_x + 1;
-        if (segWidth < minBandWidth) return;
-        if (l < 5 || l > 99) return; // Very broad range
 
+        if (segWidth < minBandWidth) return;
+
+        // 【改善ポイント1】まず色を判定する (除外する前に判断する)
         const resistorColor = findClosestColor(avgColor, customColors);
+        const isMetallic = resistorColor.name.startsWith('Gold') || resistorColor.name === 'Silver';
+
+        // 【改善ポイント2】輝度制限の動的緩和
+        // 金属色（金色・銀色）の可能性がある場合は、白飛び(L>99)や影(L<5)を許容する
+        if (!isMetallic && (l < 5 || l > 99)) return;
+
+        // 【改善ポイント3】端のバンドに対する幅制限の緩和
+        // 4バンド目の金色は、画像端で広く認識されやすいため、
+        // 配列の最初や最後付近のセグメントは、2.5倍ルールから除外する
+        const isAtEdge = (index === 0 || index >= segments.length - 2);
+        if (!isAtEdge && segWidth > medianWidth * 2.5) {
+            // 中央付近で異常に太い場合は、依然として本体色(Body)の可能性が高い
+            if (resistorColor.name.includes('Body')) return;
+        }
 
         finalBands.push({
             x: Math.round((seg.start_x + seg.end_x) / 2),
