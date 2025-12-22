@@ -1,7 +1,43 @@
 
+export interface Env {
+    LEARNING_STORE: KVNamespace;
+    ASSETS: Fetcher;
+}
+
+interface Pixel {
+    r: number;
+    g: number;
+    b: number;
+    x?: number;
+}
+
+interface DetectionResult {
+    colors: any[];
+    detected_bands: string[];
+    resistor_value: string | null;
+    totalPixels?: number;
+    slices?: any[];
+}
+
+interface ResistorColor {
+    name: string;
+    r: number;
+    g: number;
+    b: number;
+    value?: number;
+    multiplier?: number;
+    tolerance?: number;
+}
+
+interface CustomColor {
+    name: string;
+    r: number;
+    g: number;
+    b: number;
+}
 
 export default {
-    async fetch(request, env, ctx) {
+    async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
         const url = new URL(request.url);
 
         // Serve API
@@ -33,12 +69,12 @@ export default {
 
 // --- Helper Functions ---
 
-function findDominantColor(bands) {
+function findDominantColor(bands: { name: string }[] | string[]): string | null {
     if (!bands || bands.length === 0) return null;
-    const colorCounts = {};
+    const colorCounts: { [key: string]: number } = {};
     bands.forEach(band => {
         // Use band.name if it exists (from colorObjs), otherwise it's just the name string
-        const name = band.name || band;
+        const name = (typeof band === 'string') ? band : band.name;
         colorCounts[name] = (colorCounts[name] || 0) + 1;
     });
 
@@ -55,18 +91,18 @@ function findDominantColor(bands) {
 
 // --- Main API Handlers ---
 
-async function handleLearn(request, env) {
+async function handleLearn(request: Request, env: Env): Promise<Response> {
     try {
-        const { detectedColor, correctColorName } = await request.json();
+        const { detectedColor, correctColorName } = await request.json() as any;
 
         if (!detectedColor || !correctColorName) {
             return new Response('Invalid learning data', { status: 400 });
         }
 
         // Get current definitions, or initialize if null (safety check for missing KV)
-        let definitions = [];
+        let definitions: CustomColor[] = [];
         if (env.LEARNING_STORE) {
-            definitions = await env.LEARNING_STORE.get("custom_colors", { type: "json" }) || [];
+            definitions = await env.LEARNING_STORE.get<CustomColor[]>("custom_colors", { type: "json" }) || [];
         }
 
         // Add or update the definition
@@ -74,7 +110,7 @@ async function handleLearn(request, env) {
             def.r === detectedColor.r && def.g === detectedColor.g && def.b === detectedColor.b
         );
 
-        const newDefinition = {
+        const newDefinition: CustomColor = {
             name: correctColorName,
             r: detectedColor.r,
             g: detectedColor.g,
@@ -98,23 +134,23 @@ async function handleLearn(request, env) {
             headers: { 'Content-Type': 'application/json' }
         });
 
-    } catch (e) {
+    } catch (e: any) {
         console.error(`[handleLearn] Error: ${e.message}`);
         return new Response(JSON.stringify({ error: e.message }), { status: 500 });
     }
 }
 
 
-async function handleAnalysis(request, env) {
+async function handleAnalysis(request: Request, env: Env): Promise<Response> {
     // Forward to the new endpoint to keep it simple
     return handleExtractColors(request, env);
 }
 
-async function handleScan(request, env) {
+async function handleScan(request: Request, env: Env): Promise<Response> {
     try {
-        const { slices } = await request.json();
+        const { slices } = await request.json() as { slices: Pixel[][] };
         const customColors = env.LEARNING_STORE
-            ? await env.LEARNING_STORE.get("custom_colors", { type: "json" }) || []
+            ? await env.LEARNING_STORE.get<CustomColor[]>("custom_colors", { type: "json" }) || []
             : [];
 
 
@@ -142,26 +178,26 @@ async function handleScan(request, env) {
             const bands = res.colors;
 
             // 1. Always filter out explicit body colors by name (case-insensitive + partial match)
-            const withoutBeige = bands.filter(b => {
+            const withoutBeige = bands.filter((b: any) => {
                 const n = b.name.toLowerCase();
                 return !n.includes('body') && !n.includes('beige');
             });
             if (withoutBeige.length < 3) return [];
 
             // 2. Then apply width-based filtering on the remaining bands
-            const widths = withoutBeige.map(b => b.count).sort((a, b) => a - b);
+            const widths = withoutBeige.map((b: any) => b.count).sort((a: number, b: number) => a - b);
             const medianWidth = widths[Math.floor(widths.length / 2)];
             const maxWidth = widths[widths.length - 1];
 
             // If a band is significantly wider than the median (e.g., > 2.5x), treat it as body
             const bodyColorName = (maxWidth > medianWidth * 2.5)
-                ? withoutBeige.find(b => b.count === maxWidth).name
+                ? withoutBeige.find((b: any) => b.count === maxWidth).name
                 : null;
 
-            return withoutBeige.filter(b => b.name !== bodyColorName).map(b => b.name);
+            return withoutBeige.filter((b: any) => b.name !== bodyColorName).map((b: any) => b.name);
         });
 
-        const sequenceCounts = {};
+        const sequenceCounts: { [key: string]: number } = {};
         allProcessedSequences.forEach(seq => {
             if (seq.length >= 3) {
                 const key = seq.join(',');
@@ -169,7 +205,7 @@ async function handleScan(request, env) {
             }
         });
 
-        let bestSequence = [];
+        let bestSequence: string[] = [];
         if (Object.keys(sequenceCounts).length > 0) {
             const [topSequence] = Object.entries(sequenceCounts).sort((a, b) => b[1] - a[1])[0];
             bestSequence = topSequence.split(',');
@@ -183,16 +219,16 @@ async function handleScan(request, env) {
             resistor_value: resistorValue
         }), { headers: { 'Content-Type': 'application/json' } });
 
-    } catch (e) {
+    } catch (e: any) {
         return new Response(JSON.stringify({ error: e.message }), { status: 500 });
     }
 }
 
-async function handleExtractColors(request, env) {
+async function handleExtractColors(request: Request, env: Env): Promise<Response> {
     try {
-        const { pixels, colorCount } = await request.json();
+        const { pixels, colorCount } = await request.json() as { pixels: Pixel[], colorCount: number };
         const customColors = env.LEARNING_STORE
-            ? await env.LEARNING_STORE.get("custom_colors", { type: "json" }) || []
+            ? await env.LEARNING_STORE.get<CustomColor[]>("custom_colors", { type: "json" }) || []
             : [];
 
         if (!pixels || !Array.isArray(pixels) || !colorCount) {
@@ -244,23 +280,23 @@ async function handleExtractColors(request, env) {
             resistor_value: resistorValue
         }), { headers: { 'Content-Type': 'application/json' } });
 
-    } catch (e) {
+    } catch (e: any) {
         console.error(`[handleExtractColors] Error: ${e.message}`);
         return new Response(JSON.stringify({ error: e.message, stack: e.stack }), { status: 500 });
     }
 }
 
-function getDominantColors(pixels, k) {
+function getDominantColors(pixels: Pixel[], k: number): { rgb: Pixel, count: number, avgX: number }[] {
     if (pixels.length === 0 || k === 0) return [];
 
     // 1. Create a bucket with all pixels
-    let buckets = [pixels];
+    let buckets: Pixel[][] = [pixels];
 
     // 2. Iteratively split buckets
     while (buckets.length < k) {
         let largestBucketIndex = -1;
         let largestRange = -1;
-        let dimensionToSplit = -1;
+        let dimensionToSplit: 'r' | 'g' | 'b' | -1 = -1;
 
         // Find the bucket with the largest color range to split
         for (let i = 0; i < buckets.length; i++) {
@@ -283,11 +319,11 @@ function getDominantColors(pixels, k) {
             }
         }
 
-        if (largestBucketIndex === -1) break; // No more splits possible
+        if (largestBucketIndex === -1 || dimensionToSplit === -1) break; // No more splits possible
 
         // 3. Split the chosen bucket
         const bucketToSplit = buckets[largestBucketIndex];
-        bucketToSplit.sort((a, b) => a[dimensionToSplit] - b[dimensionToSplit]);
+        bucketToSplit.sort((a, b) => a[dimensionToSplit as 'r' | 'g' | 'b'] - b[dimensionToSplit as 'r' | 'g' | 'b']);
 
         const medianIndex = Math.floor(bucketToSplit.length / 2);
 
@@ -300,7 +336,7 @@ function getDominantColors(pixels, k) {
 
     // 4. Average the colors in each bucket
     return buckets.filter(b => b.length > 0).map(bucket => {
-        const colorSum = bucket.reduce((acc, p) => ({ r: acc.r + p.r, g: acc.g + p.g, b: acc.b + p.b, x: acc.x + p.x }), { r: 0, g: 0, b: 0, x: 0 });
+        const colorSum = bucket.reduce((acc, p) => ({ r: acc.r + p.r, g: acc.g + p.g, b: acc.b + p.b, x: (acc.x || 0) + (p.x || 0) }), { r: 0, g: 0, b: 0, x: 0 });
         const avgColor = {
             r: Math.round(colorSum.r / bucket.length),
             g: Math.round(colorSum.g / bucket.length),
@@ -315,7 +351,7 @@ function getDominantColors(pixels, k) {
 
 // --- Analysis Logic (Copied and adapted from test_edge_detection.js) ---
 
-const RESISTOR_COLORS = [
+const RESISTOR_COLORS: ResistorColor[] = [
     // Standard EIA color codes
     { name: 'Black', r: 0, g: 0, b: 0, value: 0, multiplier: 1 },
     { name: 'Brown', r: 165, g: 42, b: 42, value: 1, multiplier: 10, tolerance: 1 },
@@ -339,7 +375,7 @@ const RESISTOR_COLORS = [
     { name: 'Light Blue (Body)', r: 173, g: 216, b: 230 }
 ];
 
-function findClosestColor(pixel, customColors = []) {
+function findClosestColor(pixel: { r: number, g: number, b: number }, customColors: CustomColor[] = []): ResistorColor {
     let minDist = Infinity;
     let closest = RESISTOR_COLORS[0];
 
@@ -351,7 +387,8 @@ function findClosestColor(pixel, customColors = []) {
             const biasedDist = dist * 0.4;
             if (biasedDist < minDist) {
                 minDist = biasedDist;
-                closest = color;
+                // Map CustomColor to ResistorColor structure
+                closest = { ...color, name: color.name, value: -1 }; // Approximate
             }
         }
     }
@@ -380,18 +417,19 @@ function findClosestColor(pixel, customColors = []) {
 
     // Unify different shades of Gold into a single 'Gold'
     if (closest.name && closest.name.startsWith('Gold')) {
-        return RESISTOR_COLORS.find(c => c.name === 'Gold');
+        const gold = RESISTOR_COLORS.find(c => c.name === 'Gold');
+        if (gold) return gold;
     }
 
     return closest;
 }
 
-function calculateResistorValue(bands) {
+function calculateResistorValue(bands: string[]): string | null {
     if (!bands || bands.length < 3) return null;
 
     let colorObjsFull = bands.map(bandName => {
         return RESISTOR_COLORS.find(c => c.name === bandName) || null;
-    }).filter(obj => obj !== null);
+    }).filter(obj => obj !== null) as ResistorColor[];
 
     if (colorObjsFull.length < 3) {
         return "Not enough valid bands";
@@ -399,9 +437,9 @@ function calculateResistorValue(bands) {
 
     let resistance = 0;
     let tolerance = 20; // Default tolerance
-    let digits = [];
-    let multiplierObj = null;
-    let toleranceObj = null;
+    let digits: ResistorColor[] = [];
+    let multiplierObj: ResistorColor | null = null;
+    let toleranceObj: ResistorColor | null = null;
 
     // Determine 3, 4, 5, or 6 band resistor
     // For simplicity, we will assume 4 or 5 band, where the last band is tolerance and second-to-last is multiplier
@@ -426,7 +464,7 @@ function calculateResistorValue(bands) {
     const digitValue = parseInt(digits.map(d => d.value).join(''));
     resistance = digitValue * multiplierObj.multiplier;
 
-    if (toleranceObj) {
+    if (toleranceObj && toleranceObj.tolerance) {
         tolerance = toleranceObj.tolerance;
     }
 
@@ -434,18 +472,18 @@ function calculateResistorValue(bands) {
 }
 
 
-function formatResistance(ohms) {
+function formatResistance(ohms: number): string {
     if (ohms >= 1000000) return (ohms / 1000000).toFixed(1).replace(/\.0$/, '') + 'MΩ';
     if (ohms >= 1000) return (ohms / 1000).toFixed(1).replace(/\.0$/, '') + 'kΩ';
     return ohms + 'Ω';
 }
 
-function rgbToHex(r, g, b) {
+function rgbToHex(r: number, g: number, b: number): string {
     return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1).toUpperCase();
 }
 
 
-function rgbToLab(r, g, b) {
+function rgbToLab(r: number, g: number, b: number): { l: number, a: number, b: number } {
     r /= 255, g /= 255, b /= 255;
     r = r > 0.04045 ? Math.pow((r + 0.055) / 1.055, 2.4) : r / 12.92;
     g = g > 0.04045 ? Math.pow((g + 0.055) / 1.055, 2.4) : g / 12.92;
@@ -460,27 +498,24 @@ function rgbToLab(r, g, b) {
     return { l: (116 * y) - 16, a: 500 * (x - y), b: 200 * (y - z) };
 }
 
-function colorDistance(c1, c2) {
+function colorDistance(c1: { r: number, g: number, b: number }, c2: { r: number, g: number, b: number }): number {
     const lab1 = rgbToLab(c1.r, c1.g, c1.b);
     const lab2 = rgbToLab(c2.r, c2.g, c2.b);
     return Math.sqrt(Math.pow(lab1.l - lab2.l, 2) + Math.pow(lab1.a - lab2.a, 2) + Math.pow(lab1.b - lab2.b, 2));
 }
 
-function averageColor(colors) {
+function averageColor(colors: Pixel[]): Pixel {
     if (colors.length === 0) return { r: 0, g: 0, b: 0 };
     const sum = colors.reduce((acc, c) => ({ r: acc.r + c.r, g: acc.g + c.g, b: acc.b + c.b }), { r: 0, g: 0, b: 0 });
     return { r: Math.round(sum.r / colors.length), g: Math.round(sum.g / colors.length), b: Math.round(sum.b / colors.length) };
 }
 
-function extractBands(pixels, width, height, colorChangeThreshold, customColors = []) {
+function extractBands(pixels: Pixel[], width: number, height: number, colorChangeThreshold: number, customColors: CustomColor[] = []): any[] {
     if (pixels.length === 0 || width === 0 || height === 0) return [];
 
-    const averagedLine = [];
+    const averagedLine: Pixel[] = [];
     const startY = Math.floor(height * 0.25);
     const endY = Math.floor(height * 0.75);
-
-
-
 
     for (let x = 0; x < width; x++) {
         let sumR = 0, sumG = 0, sumB = 0;
@@ -501,25 +536,25 @@ function extractBands(pixels, width, height, colorChangeThreshold, customColors 
         }
     }
 
-    const segments = [];
+    const segments: { start_x: number, end_x: number, pixels: Pixel[] }[] = [];
     if (averagedLine.length === 0) return [];
 
-    let currentSegment = { start_x: averagedLine[0].x, end_x: averagedLine[0].x, pixels: [averagedLine[0]] };
+    let currentSegment = { start_x: (averagedLine[0].x || 0), end_x: (averagedLine[0].x || 0), pixels: [averagedLine[0]] };
     for (let i = 1; i < averagedLine.length; i++) {
         const prevColor = averagedLine[i - 1];
         const currentColor = averagedLine[i];
 
         if (colorDistance(prevColor, currentColor) > colorChangeThreshold) {
             segments.push(currentSegment);
-            currentSegment = { start_x: currentColor.x, end_x: currentColor.x, pixels: [currentColor] };
+            currentSegment = { start_x: (currentColor.x || 0), end_x: (currentColor.x || 0), pixels: [currentColor] };
         } else {
-            currentSegment.end_x = currentColor.x;
+            currentSegment.end_x = (currentColor.x || 0);
             currentSegment.pixels.push(currentColor);
         }
     }
     segments.push(currentSegment);
 
-    const finalBands = [];
+    const finalBands: any[] = [];
     const minBandWidth = 3;
 
     // 全セグメントの幅の統計を先に取る（後のフィルタリング用）
@@ -579,9 +614,9 @@ function extractBands(pixels, width, height, colorChangeThreshold, customColors 
 }
 
 
-async function handleLearnFromValue(request, env) {
+async function handleLearnFromValue(request: Request, env: Env): Promise<Response> {
     try {
-        const { detectedBands, correctValue, correctTolerance } = await request.json();
+        const { detectedBands, correctValue, correctTolerance } = await request.json() as any;
 
         if (!detectedBands || !Array.isArray(detectedBands) || !correctValue) {
             return new Response(JSON.stringify({ error: 'Invalid input data.' }), { status: 400 });
@@ -601,12 +636,12 @@ async function handleLearnFromValue(request, env) {
             yourDetectedBands: detectedBands,
         }), { headers: { 'Content-Type': 'application/json' } });
 
-    } catch (e) {
+    } catch (e: any) {
         return new Response(JSON.stringify({ error: e.message }), { status: 500 });
     }
 }
 
-function parseResistance(valueStr) {
+function parseResistance(valueStr: string): number | null {
     if (!valueStr) return null;
     const str = String(valueStr).trim().toUpperCase();
     let multiplier = 1;
@@ -619,7 +654,7 @@ function parseResistance(valueStr) {
     return isNaN(value) ? null : value * multiplier;
 }
 
-function resistanceToColors(ohms, tolerance = null) {
+function resistanceToColors(ohms: number, tolerance: string | null = null): string[] {
     if (ohms < 0.1) return [];
 
     const colorMap = [
@@ -629,7 +664,7 @@ function resistanceToColors(ohms, tolerance = null) {
         { name: 'White', value: 9 }
     ];
 
-    const toleranceMap = {
+    const toleranceMap: { [key: string]: string } = {
         '1': 'Brown', '2': 'Red', '0.5': 'Green', '0.25': 'Blue',
         '0.1': 'Violet', '5': 'Gold', '10': 'Silver', '20': 'None'
     };
@@ -672,11 +707,11 @@ function resistanceToColors(ohms, tolerance = null) {
 }
 
 
-async function handleEdgeDetection(request, env) {
+async function handleEdgeDetection(request: Request, env: Env): Promise<Response> {
     try {
-        const { pixels, width, height, threshold } = await request.json();
+        const { pixels, width, height, threshold } = await request.json() as { pixels: Pixel[], width: number, height: number, threshold: number };
         const customColors = env.LEARNING_STORE
-            ? await env.LEARNING_STORE.get("custom_colors", { type: "json" }) || []
+            ? await env.LEARNING_STORE.get<CustomColor[]>("custom_colors", { type: "json" }) || []
             : [];
 
         if (!pixels || !Array.isArray(pixels) || !width || !height || threshold === undefined) {
@@ -697,11 +732,11 @@ async function handleEdgeDetection(request, env) {
 
         // 2. Identify segments that are "wide" compared to others
         if (processedBands.length >= 3) {
-            const widths = processedBands.map(b => b.width).sort((a, b) => a - b);
+            const widths = processedBands.map((b: any) => b.width).sort((a: number, b: number) => a - b);
             const medianWidth = widths[Math.floor(widths.length / 2)];
 
             // If a segment is > 2.5x the median width, it's highly likely to be the body or a gap
-            processedBands = processedBands.map(b => {
+            processedBands = processedBands.map((b: any) => {
                 if (b.width > medianWidth * 2.5) {
                     return { ...b, isBody: true };
                 }
@@ -710,8 +745,8 @@ async function handleEdgeDetection(request, env) {
         }
 
         // 3. Filter out those marked as body
-        const filteredBands = processedBands.filter(b => !b.isBody);
-        const filteredBandNames = filteredBands.map(b => b.colorName);
+        const filteredBands = processedBands.filter((b: any) => !b.isBody);
+        const filteredBandNames = filteredBands.map((b: any) => b.colorName);
 
         const resistorValue = calculateResistorValue(filteredBandNames);
 
@@ -721,9 +756,8 @@ async function handleEdgeDetection(request, env) {
             detected_bands: filteredBandNames,
             resistor_value: resistorValue
         }), { headers: { 'Content-Type': 'application/json' } });
-    } catch (e) {
+    } catch (e: any) {
         console.error(`[handleEdgeDetection] Error: ${e.message}`);
         return new Response(JSON.stringify({ error: e.message }), { status: 500 });
     }
 }
-

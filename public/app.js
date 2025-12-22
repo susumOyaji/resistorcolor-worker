@@ -189,6 +189,21 @@ document.addEventListener('DOMContentLoaded', () => {
     function handleFiles(e) {
         const file = e.target.files[0];
         if (file && file.type.startsWith('image/')) {
+            // Clear previous results immediately
+            const edgeImageContainer = document.getElementById('edge-image-container');
+            if (edgeImageContainer) edgeImageContainer.style.display = 'none';
+
+            const edgeAnalyzedImage = document.getElementById('edge-analyzed-image');
+            if (edgeAnalyzedImage) edgeAnalyzedImage.src = '';
+
+            const edgeOverlay = document.getElementById('edge-overlay');
+            if (edgeOverlay) edgeOverlay.innerHTML = '';
+
+            const edgeResult = document.getElementById('edge-result');
+            if (edgeResult) edgeResult.style.display = 'none';
+
+            window.lastEdgeDetectionResult = null;
+
             const reader = new FileReader();
             reader.onload = (event) => {
                 const img = new Image();

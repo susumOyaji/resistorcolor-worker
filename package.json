@@ -2,7 +2,7 @@
     "name": "resistorcolor-worker",
     "version": "1.0.0",
     "description": "Resistor color bar extractor on Cloudflare Workers",
-    "main": "src/index.js",
+    "main": "src/index.ts",
     "scripts": {
         "start": "wrangler dev",
         "deploy": "wrangler deploy"
@@ -11,6 +11,8 @@
         "get-pixels": "^3.3.3"
     },
     "devDependencies": {
-        "wrangler": "^3.0.0"
+        "@cloudflare/workers-types": "^4.20251221.0",
+        "typescript": "^5.9.3",
+        "wrangler": "^4.56.0"
     }
 }
