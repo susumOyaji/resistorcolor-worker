@@ -155,7 +155,12 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    if (changeImageBtn) changeImageBtn.addEventListener('click', resetApp);
+    if (changeImageBtn) {
+        changeImageBtn.addEventListener('click', () => {
+            fileInput.value = '';
+            fileInput.click();
+        });
+    }
     if (resetCropBtn) resetCropBtn.addEventListener('click', () => cropper ? cropper.reset() : null);
 
     // --- Core Functions ---
