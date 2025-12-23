@@ -230,7 +230,15 @@ body {
     max-height: 400px;
     width: 100%;
     max-width: 450px;
-    /* Restore the original max-width constraint */
+}
+
+#edge-analyzed-image {
+    width: 100%;
+    height: auto;
+    display: block;
+    object-fit: contain;
+    /* 小さい画像でも色がボケないようにする設定（任意） */
+    image-rendering: pixelated;
 }
 
 #edge-image-container {
@@ -655,12 +663,12 @@ input:checked+.slider:before {
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
 }
 
-input:checked + .slider {
+input:checked+.slider {
     background: linear-gradient(135deg, #f59e0b, #d97706);
     box-shadow: 0 0 15px rgba(245, 158, 11, 0.4);
 }
 
-input:checked + .slider:before {
+input:checked+.slider:before {
     transform: translateX(22px);
     background-color: #fff;
 }
@@ -672,7 +680,7 @@ input:checked + .slider:before {
     transition: color 0.3s ease;
 }
 
-input:checked ~ .learning-mode-text {
+input:checked~.learning-mode-text {
     color: #fbbf24;
     text-shadow: 0 0 8px rgba(245, 158, 11, 0.3);
 }

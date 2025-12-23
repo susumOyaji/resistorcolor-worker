@@ -226,7 +226,12 @@ async function handleScan(request: Request, env: Env): Promise<Response> {
 
 async function handleExtractColors(request: Request, env: Env): Promise<Response> {
     try {
-        const { pixels, colorCount } = await request.json() as { pixels: Pixel[], colorCount: number };
+        const { pixels, colorCount, width, height } = await request.json() as {
+            pixels: Pixel[],
+            colorCount: number,
+            width?: number,
+            height?: number
+        };
         const customColors = env.LEARNING_STORE
             ? await env.LEARNING_STORE.get<CustomColor[]>("custom_colors", { type: "json" }) || []
             : [];
@@ -238,27 +243,73 @@ async function handleExtractColors(request: Request, env: Env): Promise<Response
         // --- Median Cut Quantization ---
         const dominantColors = getDominantColors(pixels, colorCount);
 
-        const enrichedColors = dominantColors.map(color => {
-            const resistorColor = findClosestColor(color.rgb, customColors);
+        // --- Apply Edge Detection Logic: Position-based Color Refinement ---
+        const imageWidth = width || Math.sqrt(pixels.length); // Estimate if not provided
+        const enrichedColors = dominantColors.map((color, index) => {
+            let resistorColor = findClosestColor(color.rgb, customColors);
+            const lab = rgbToLab(color.rgb.r, color.rgb.g, color.rgb.b);
+
+            // Position information (from avgX)
+            const normalizedX = color.avgX / imageWidth; // 0.0 ~ 1.0
+            const isAtEdge = normalizedX < 0.2 || normalizedX > 0.8;
+
+            // --- Context-aware refinement (from extractBands logic) ---
+
+            // Silver candidate detection
+            const isLowChroma = Math.abs(lab.a) < 3 && Math.abs(lab.b) < 3;
+            const isCandidateSilver =
+                isLowChroma &&
+                lab.l > 60 && lab.l < 95 &&
+                isAtEdge;
+
+            // Gold candidate detection
+            const isWarm = lab.a > -5 && lab.b > 20;
+            const isCandidateGold =
+                isWarm &&
+                lab.l > 25 && lab.l < 90 &&
+                isAtEdge;
+
+            // Override color name based on position and physical properties
+            if (isCandidateSilver) {
+                const silverColor = RESISTOR_COLORS.find(c => c.name === 'Silver');
+                if (silverColor) resistorColor = silverColor;
+            } else if (isCandidateGold) {
+                const goldColor = RESISTOR_COLORS.find(c => c.name === 'Gold');
+                if (goldColor) resistorColor = goldColor;
+            }
+
             return {
                 ...color,
                 name: resistorColor.name,
                 hex: rgbToHex(color.rgb.r, color.rgb.g, color.rgb.b),
+                position: normalizedX, // Add position info for debugging
+                isAtEdge: isAtEdge
             };
         });
 
-        const bandNames = enrichedColors.map(c => c.name);
-
-        // Find and filter out the dominant color (body color) before calculation
-        const colorObjs = bandNames.map(name => RESISTOR_COLORS.find(c => c.name === name)).filter(Boolean);
-
-        // --- Improved Body Filtering for API Response ---
-        // Filter out 'Beige (Body)' and any extremely dominant color by frequency/count
+        // --- Improved Body Filtering using Width Information ---
         const totalPixels = pixels.length;
+
+        // Calculate width statistics (similar to extractBands)
+        const colorWidths = enrichedColors.map(c => c.count);
+        const sortedWidths = [...colorWidths].sort((a, b) => a - b);
+        const medianWidth = sortedWidths[Math.floor(sortedWidths.length / 2)];
+
         const filteredEnrichedColors = enrichedColors.filter(c => {
+            // 1. Filter by name
             if (c.name === 'Beige (Body)') return false;
-            // If one color takes up more than 70% of the sample, it's likely background/body
+
+            // 2. Filter by extreme dominance (70% threshold)
             if (c.count > totalPixels * 0.7) return false;
+
+            // 3. Filter by width (if significantly wider than median, likely body)
+            // Only apply to non-edge colors
+            if (!c.isAtEdge && c.count > medianWidth * 2.5) {
+                if (c.name.includes('Body') || c.name.includes('Beige') || c.name.includes('Tan')) {
+                    return false;
+                }
+            }
+
             return true;
         });
 
@@ -273,7 +324,9 @@ async function handleExtractColors(request: Request, env: Env): Promise<Response
                 hex: c.hex,
                 name: c.name,
                 count: c.count,
-                avgX: c.avgX
+                avgX: c.avgX,
+                position: c.position,
+                isAtEdge: c.isAtEdge
             })),
             totalPixels: pixels.length,
             detected_bands: filteredBandNames,
@@ -369,10 +422,15 @@ const RESISTOR_COLORS: ResistorColor[] = [
     { name: 'Gold_Dark', r: 184, g: 134, b: 11, value: -1, tolerance: 5 }, // 影の部分
     { name: 'Gold_Ochre', r: 204, g: 119, b: 34, value: -1, tolerance: 5 }, // 黄土色に近いゴールド
     { name: 'Silver', r: 192, g: 192, b: 192, multiplier: 0.01, tolerance: 10 },
-    // Body color variants
+    // Body color variants (expanded for better Gold vs Body discrimination)
     { name: 'Beige (Body)', r: 245, g: 245, b: 220 },
     { name: 'Tan (Body)', r: 210, g: 180, b: 140 },
-    { name: 'Light Blue (Body)', r: 173, g: 216, b: 230 }
+    { name: 'Sandy (Body)', r: 244, g: 164, b: 96 }, // 砂色系のBody
+    { name: 'Cream (Body)', r: 255, g: 253, b: 208 }, // クリーム色系のBody
+    { name: 'Khaki (Body)', r: 195, g: 176, b: 145 }, // カーキ色系のBody
+    { name: 'Light Blue (Body)', r: 173, g: 216, b: 230 },
+    // Dark variants for better detection under shadows
+    { name: 'Violet_Dark', r: 100, g: 50, b: 150, value: 7, multiplier: 10000000, tolerance: 0.1 }
 ];
 
 function findClosestColor(pixel: { r: number, g: number, b: number }, customColors: CustomColor[] = []): ResistorColor {
@@ -384,7 +442,9 @@ function findClosestColor(pixel: { r: number, g: number, b: number }, customColo
         for (const color of customColors) {
             const dist = colorDistance(pixel, color);
             // Smaller multiplier means higher priority
-            const biasedDist = dist * 0.4;
+            // Adjusted from 0.4 to 0.7 to avoid false positives from shadow/dark bands
+            const biasedDist = dist * 0.7;
+
             if (biasedDist < minDist) {
                 minDist = biasedDist;
                 // Map CustomColor to ResistorColor structure
@@ -394,19 +454,49 @@ function findClosestColor(pixel: { r: number, g: number, b: number }, customColo
     }
 
     // Then check standard colors
+    const pixelLab = rgbToLab(pixel.r, pixel.g, pixel.b);
+    const pixelChroma = Math.sqrt(pixelLab.a * pixelLab.a + pixelLab.b * pixelLab.b);
+
+    // Calculate hue angle in Lab color space for better Gold vs Body discrimination
+    const hueAngle = Math.atan2(pixelLab.b, pixelLab.a) * (180 / Math.PI);
+
     for (const color of RESISTOR_COLORS) {
         let dist = colorDistance(pixel, color);
+        const colorLab = rgbToLab(color.r, color.g, color.b);
+        const colorChroma = Math.sqrt(colorLab.a * colorLab.a + colorLab.b * colorLab.b);
 
-        // Apply strong bias to make Gold/Silver more likely to be chosen over Yellow/Gray
+        // --- IMPROVEMENT: Enhanced Gold vs Body Color Discrimination ---
+
+        // 1. Chroma-based Penalty for Neutral Colors
+        const isNeutral = ['Black', 'Gray', 'White', 'Silver'].includes(color.name) || color.name.includes('(Body)');
+        if (pixelChroma > 10 && isNeutral) {
+            dist *= (1.0 + (pixelChroma / 50));
+        }
+
+        // 2. Gold-specific enhancement with saturation check
         if (color.name.startsWith('Gold')) {
-            dist *= 0.65; // ゴールドの判定を強く優先
+            // Gold has high saturation (chroma > 30) and specific hue (60-90 degrees)
+            const isGoldLike = pixelChroma > 30 && hueAngle > 60 && hueAngle < 100;
+            if (isGoldLike) {
+                dist *= 0.55; // Strong preference for Gold when characteristics match
+            } else {
+                dist *= 0.75; // Moderate preference otherwise
+            }
         } else if (color.name === 'Silver') {
             dist *= 0.8;
         }
 
-        // Body colors should be picked easily if it's actually body
+        // 3. Body colors: penalize if pixel has high saturation (Gold-like)
         if (color.name.includes('(Body)')) {
-            dist *= 0.9;
+            if (pixelChroma > 35) {
+                // High saturation pixel is unlikely to be Body color
+                dist *= 1.5;
+            } else if (pixelChroma < 15) {
+                // Low saturation is typical for Body colors
+                dist *= 0.85;
+            } else {
+                dist *= 0.95;
+            }
         }
 
         if (dist <= minDist) {
@@ -419,6 +509,12 @@ function findClosestColor(pixel: { r: number, g: number, b: number }, customColo
     if (closest.name && closest.name.startsWith('Gold')) {
         const gold = RESISTOR_COLORS.find(c => c.name === 'Gold');
         if (gold) return gold;
+    }
+
+    // Unify Dark Violet back to Violet
+    if (closest.name === 'Violet_Dark') {
+        const violet = RESISTOR_COLORS.find(c => c.name === 'Violet');
+        if (violet) return violet;
     }
 
     return closest;
@@ -574,17 +670,46 @@ function extractBands(pixels: Pixel[], width: number, height: number, colorChang
 
         const isAtEdge = (index === 0 || index >= segments.length - 2);
 
-        // Doc.txtに基づくSilver検出の強化: Role(位置) + Physical(彩度・明度・幅)による判定
+        // Doc.txtに基づくSilver/Gold検出の強化: Role(位置) + Physicalによる判定
         const isLowChroma = Math.abs(lab.a) < 3 && Math.abs(lab.b) < 3;
         const isCandidateSilver =
             isLowChroma &&
-            l > 65 && l < 95 &&
-            segWidth < medianWidth * 0.8 &&
+            l > 60 && l < 95 &&
+            segWidth < medianWidth * 1.5 &&
+            isAtEdge;
+
+        // Gold Candidate: 強化された判定ロジック
+        // 1. 色相: 黄色系 (Lab b > 20)
+        // 2. 彩度: 高彩度 (chroma > 30) - Body色との区別
+        // 3. 位置: 端にある
+        // 4. 幅: 細い (tolerance band)
+        const chroma = Math.sqrt(lab.a * lab.a + lab.b * lab.b);
+        const isWarm = lab.a > -5 && lab.b > 20;
+        const isHighSaturation = chroma > 30; // Body色は通常 chroma < 25
+        const isCandidateGold =
+            isWarm &&
+            isHighSaturation &&
+            l > 25 && l < 90 &&
+            segWidth < medianWidth * 1.2 && // Goldは通常細い
             isAtEdge;
 
         if (isCandidateSilver) {
             const silverColor = RESISTOR_COLORS.find(c => c.name === 'Silver');
             if (silverColor) resistorColor = silverColor;
+        } else if (isCandidateGold) {
+            // 黄色やオレンジと迷いやすいGoldを、位置情報から積極的に採用する
+            const goldColor = RESISTOR_COLORS.find(c => c.name === 'Gold');
+            if (goldColor) resistorColor = goldColor;
+        }
+
+        // Additional check: If detected as Body color but has Gold-like characteristics, reconsider
+        if (resistorColor.name.includes('(Body)') && isAtEdge) {
+            const bodyChroma = Math.sqrt(lab.a * lab.a + lab.b * lab.b);
+            // If Body color at edge has high saturation and warm tone, likely Gold
+            if (bodyChroma > 30 && lab.b > 25 && segWidth < medianWidth * 1.2) {
+                const goldColor = RESISTOR_COLORS.find(c => c.name === 'Gold');
+                if (goldColor) resistorColor = goldColor;
+            }
         }
 
         const isMetallic = resistorColor.name.startsWith('Gold') || resistorColor.name === 'Silver';
@@ -607,6 +732,7 @@ function extractBands(pixels: Pixel[], width: number, height: number, colorChang
             rgb: avgColor,
             l: l,
             width: segWidth,
+            chroma: chroma, // Add chroma for debugging Gold vs Body discrimination
         });
     });
 

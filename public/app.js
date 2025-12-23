@@ -359,10 +359,23 @@ document.addEventListener('DOMContentLoaded', () => {
             const label = document.createElement('div');
             label.style.cssText = `
                 position: absolute; top: 5px; left: 50%; transform: translateX(-50%);
-                background: rgba(0, 0, 0, 0.8); color: white; padding: 2px 6px;
+                background: rgba(0, 0, 0, 0.9); color: white; padding: 4px 8px;
                 border-radius: 4px; font-size: 10px; font-weight: bold; white-space: nowrap;
+                display: flex; flex-direction: column; align-items: center; gap: 2px;
             `;
-            label.textContent = band.colorName;
+
+            // Color name
+            const colorNameSpan = document.createElement('span');
+            colorNameSpan.textContent = band.colorName;
+            colorNameSpan.style.cssText = 'font-size: 11px;';
+
+            // X coordinate
+            const xCoordSpan = document.createElement('span');
+            xCoordSpan.textContent = `x: ${band.x}`;
+            xCoordSpan.style.cssText = 'font-size: 9px; opacity: 0.8; color: #fbbf24;';
+
+            label.appendChild(colorNameSpan);
+            label.appendChild(xCoordSpan);
             line.appendChild(label);
             edgeOverlay.appendChild(line);
         });
@@ -390,11 +403,29 @@ document.addEventListener('DOMContentLoaded', () => {
             const chip = document.createElement('div');
             chip.className = 'band-chip';
             chip.style.cssText = `display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.5rem 1rem; background: rgba(${band.rgb.r}, ${band.rgb.g}, ${band.rgb.b}, 0.2); border: 2px solid rgb(${band.rgb.r}, ${band.rgb.g}, ${band.rgb.b}); border-radius: 8px; color: white; font-size: 0.9rem;`;
+
+            // Determine chroma color indicator
+            let chromaColor = '#94a3b8'; // default gray
+            let chromaLabel = '';
+            if (band.chroma !== undefined) {
+                if (band.chroma > 30) {
+                    chromaColor = '#4ade80'; // green - high saturation (Gold-like)
+                    chromaLabel = 'High';
+                } else if (band.chroma < 25) {
+                    chromaColor = '#60a5fa'; // blue - low saturation (Body-like)
+                    chromaLabel = 'Low';
+                } else {
+                    chromaColor = '#fbbf24'; // amber - medium
+                    chromaLabel = 'Mid';
+                }
+            }
+
             chip.innerHTML = `
                 <div style="width: 24px; height: 24px; background: rgb(${band.rgb.r}, ${band.rgb.g}, ${band.rgb.b}); border-radius: 4px; border: 1px solid rgba(255,255,255,0.3);"></div>
                 <span>${band.colorName}</span>
                 <span style="opacity: 0.6; font-size: 0.8rem;">#${((1 << 24) + (band.rgb.r << 16) + (band.rgb.g << 8) + band.rgb.b).toString(16).slice(1).toUpperCase()}</span>
                 <span style="opacity: 0.5; font-size: 0.75rem;">(x: ${band.x})</span>
+                ${band.chroma !== undefined ? `<span style="font-size: 0.7rem; padding: 2px 6px; background: rgba(0,0,0,0.3); border-radius: 3px; color: ${chromaColor};" title="Chroma (Saturation): ${band.chroma.toFixed(1)}">C: ${band.chroma.toFixed(1)} (${chromaLabel})</span>` : ''}
                 <button class="learn-btn" style="margin-left: 0.5rem; background: #f59e0b; border: none; color: white; padding: 0.25rem 0.5rem; border-radius: 4px; cursor: pointer;">Learn</button>
             `;
             chip.querySelector('.learn-btn').addEventListener('click', () => openLearnModal(band));
