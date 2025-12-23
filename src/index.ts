@@ -89,6 +89,22 @@ function findDominantColor(bands: { name: string }[] | string[]): string | null 
     return null;
 }
 
+// 新しく追加する関数
+function estimateOrientation(width: number, height: number): "horizontal" | "vertical" {
+    // 幅と高さの比率に基づいて向きを推定
+    // 抵抗器は通常、バンド部分が細長いため、
+    // 幅が高さより有意に大きい場合は水平、その逆は垂直と判断する。
+    // 閾値は調整可能だが、ここでは1.5倍を基準とする。
+    if (width > height * 1.5) { // 幅が高さの1.5倍より大きい場合
+        return "horizontal";
+    } else if (height > width * 1.5) { // 高さが幅の1.5倍より大きい場合
+        return "vertical";
+    } else {
+        // 比率があまり変わらない場合は、デフォルトで水平と仮定する。
+        return "horizontal";
+    }
+}
+
 // --- Main API Handlers ---
 
 async function handleLearn(request: Request, env: Env): Promise<Response> {
@@ -159,7 +175,8 @@ async function handleScan(request: Request, env: Env): Promise<Response> {
         }
 
         const sliceResults = slices.map(slicePixels => {
-            const bands = extractBands(slicePixels, slicePixels.length, 1, 10, customColors);
+            // slicePixels.length が幅、高さは1 (1ピクセル幅の線データ)
+            const bands = extractBands(slicePixels, slicePixels.length, 1, 10, "horizontal", customColors); // orientationを明示的に指定
             return {
                 colors: bands.map(b => ({
                     r: b.rgb.r,
@@ -190,8 +207,9 @@ async function handleScan(request: Request, env: Env): Promise<Response> {
             const maxWidth = widths[widths.length - 1];
 
             // If a band is significantly wider than the median (e.g., > 2.5x), treat it as body
-            const bodyColorName = (maxWidth > medianWidth * 2.5)
-                ? withoutBeige.find((b: any) => b.count === maxWidth).name
+            const foundBodyBand = withoutBeige.find((b: any) => b.count === maxWidth);
+            const bodyColorName = (maxWidth > medianWidth * 2.5 && foundBodyBand)
+                ? foundBodyBand.name
                 : null;
 
             return withoutBeige.filter((b: any) => b.name !== bodyColorName).map((b: any) => b.name);
@@ -240,11 +258,14 @@ async function handleExtractColors(request: Request, env: Env): Promise<Response
             return new Response('Invalid data', { status: 400 });
         }
 
+        const imageWidth = width || Math.sqrt(pixels.length); // width が指定されなかった場合の推定
+        const imageHeight = height || Math.sqrt(pixels.length); // height が指定されなかった場合の推定
+        const orientation = estimateOrientation(imageWidth, imageHeight); // ここで向きを推定
+
         // --- Median Cut Quantization ---
         const dominantColors = getDominantColors(pixels, colorCount);
 
         // --- Apply Edge Detection Logic: Position-based Color Refinement ---
-        const imageWidth = width || Math.sqrt(pixels.length); // Estimate if not provided
         const enrichedColors = dominantColors.map((color, index) => {
             let resistorColor = findClosestColor(color.rgb, customColors);
             const lab = rgbToLab(color.rgb.r, color.rgb.g, color.rgb.b);
@@ -330,7 +351,8 @@ async function handleExtractColors(request: Request, env: Env): Promise<Response
             })),
             totalPixels: pixels.length,
             detected_bands: filteredBandNames,
-            resistor_value: resistorValue
+            resistor_value: resistorValue,
+            orientation: orientation // orientationをレスポンスに追加
         }), { headers: { 'Content-Type': 'application/json' } });
 
     } catch (e: any) {
@@ -395,7 +417,7 @@ function getDominantColors(pixels: Pixel[], k: number): { rgb: Pixel, count: num
             g: Math.round(colorSum.g / bucket.length),
             b: Math.round(colorSum.b / bucket.length),
         };
-        const avgX = Math.round(colorSum.x / bucket.length);
+        const avgX = Math.round(colorSum.x! / bucket.length);
         return { rgb: avgColor, count: bucket.length, avgX: avgX };
     }).sort((a, b) => b.count - a.count); // Sort by prevalence
 }
@@ -606,45 +628,84 @@ function averageColor(colors: Pixel[]): Pixel {
     return { r: Math.round(sum.r / colors.length), g: Math.round(sum.g / colors.length), b: Math.round(sum.b / colors.length) };
 }
 
-function extractBands(pixels: Pixel[], width: number, height: number, colorChangeThreshold: number, customColors: CustomColor[] = []): any[] {
+function extractBands(pixels: Pixel[], width: number, height: number, colorChangeThreshold: number, orientation: "horizontal" | "vertical", customColors: CustomColor[] = []): any[] {
     if (pixels.length === 0 || width === 0 || height === 0) return [];
 
-    const averagedLine: Pixel[] = [];
-    const startY = Math.floor(height * 0.25);
-    const endY = Math.floor(height * 0.75);
+    let mainDim: number; // 走査する軸の長さ (水平ならwidth, 垂直ならheight)
+    let crossDim: number; // 平均化する軸の長さ (水平ならheight, 垂直ならwidth)
 
-    for (let x = 0; x < width; x++) {
+    // ピクセルインデックス取得ヘルパー
+    const getPixel = (mainIdx: number, crossIdx: number): Pixel | undefined => {
+        if (orientation === "horizontal") {
+            // 水平の場合: x = mainIdx, y = crossIdx
+            const idx = crossIdx * width + mainIdx;
+            return pixels[idx];
+        } else {
+            // 垂直の場合: x = crossIdx, y = mainIdx
+            const idx = mainIdx * width + crossIdx;
+            return pixels[idx];
+        }
+    };
+
+    if (orientation === "horizontal") {
+        mainDim = width;
+        crossDim = height;
+    } else { // vertical
+        mainDim = height;
+        crossDim = width;
+    }
+
+    const averagedLine: Pixel[] = [];
+    // 抵抗器のバンド部分をスキャンする範囲 (crossDimの25%から75%)
+    const crossAxisStart = Math.floor(crossDim * 0.25);
+    const crossAxisEnd = Math.floor(crossDim * 0.75);
+
+    for (let mainIdx = 0; mainIdx < mainDim; mainIdx++) {
         let sumR = 0, sumG = 0, sumB = 0;
         let count = 0;
-        for (let y = startY; y < endY; y++) {
-            const idx = y * width + x;
-            if (pixels[idx]) {
-                sumR += pixels[idx].r;
-                sumG += pixels[idx].g;
-                sumB += pixels[idx].b;
+        for (let crossIdx = crossAxisStart; crossIdx < crossAxisEnd; crossIdx++) {
+            const p = getPixel(mainIdx, crossIdx);
+            if (p) {
+                sumR += p.r;
+                sumG += p.g;
+                sumB += p.b;
                 count++;
             }
         }
         if (count > 0) {
-            averagedLine.push({ r: Math.round(sumR / count), g: Math.round(sumG / count), b: Math.round(sumB / count), x: x });
+            // mainIdxが水平の場合はx、垂直の場合はyに相当
+            averagedLine.push({
+                r: Math.round(sumR / count),
+                g: Math.round(sumG / count),
+                b: Math.round(sumB / count),
+                x: mainIdx // ここでは便宜的にxを使うが、垂直の場合はy軸の位置を示す
+            });
         } else {
-            averagedLine.push({ r: 0, g: 0, b: 0, x: x });
+            averagedLine.push({ r: 0, g: 0, b: 0, x: mainIdx });
         }
     }
 
-    const segments: { start_x: number, end_x: number, pixels: Pixel[] }[] = [];
+    const segments: { start_main_idx: number, end_main_idx: number, pixels: Pixel[] }[] = [];
     if (averagedLine.length === 0) return [];
 
-    let currentSegment = { start_x: (averagedLine[0].x || 0), end_x: (averagedLine[0].x || 0), pixels: [averagedLine[0]] };
+    let currentSegment = {
+        start_main_idx: (averagedLine[0].x || 0), // averagedLine[i].x は mainIdx を示す
+        end_main_idx: (averagedLine[0].x || 0),
+        pixels: [averagedLine[0]]
+    };
     for (let i = 1; i < averagedLine.length; i++) {
         const prevColor = averagedLine[i - 1];
         const currentColor = averagedLine[i];
 
         if (colorDistance(prevColor, currentColor) > colorChangeThreshold) {
             segments.push(currentSegment);
-            currentSegment = { start_x: (currentColor.x || 0), end_x: (currentColor.x || 0), pixels: [currentColor] };
+            currentSegment = {
+                start_main_idx: (currentColor.x || 0),
+                end_main_idx: (currentColor.x || 0),
+                pixels: [currentColor]
+            };
         } else {
-            currentSegment.end_x = (currentColor.x || 0);
+            currentSegment.end_main_idx = (currentColor.x || 0);
             currentSegment.pixels.push(currentColor);
         }
     }
@@ -654,14 +715,14 @@ function extractBands(pixels: Pixel[], width: number, height: number, colorChang
     const minBandWidth = 3;
 
     // 全セグメントの幅の統計を先に取る（後のフィルタリング用）
-    const allWidths = segments.map(s => s.end_x - s.start_x + 1).filter(w => w >= minBandWidth);
+    const allWidths = segments.map(s => s.end_main_idx - s.start_main_idx + 1).filter(w => w >= minBandWidth);
     const medianWidth = allWidths.length > 0 ? allWidths.sort((a, b) => a - b)[Math.floor(allWidths.length / 2)] : 10;
 
     segments.forEach((seg, index) => {
         const avgColor = averageColor(seg.pixels);
         const lab = rgbToLab(avgColor.r, avgColor.g, avgColor.b);
         const l = lab.l;
-        const segWidth = seg.end_x - seg.start_x + 1;
+        const segWidth = seg.end_main_idx - seg.start_main_idx + 1;
 
         if (segWidth < minBandWidth) return;
 
@@ -726,17 +787,21 @@ function extractBands(pixels: Pixel[], width: number, height: number, colorChang
             if (resistorColor.name.includes('Body')) return;
         }
 
+        // finalBandsに格納する座標は、orientationに応じてmainAxisCenterとなる
         finalBands.push({
-            x: Math.round((seg.start_x + seg.end_x) / 2),
+            x: orientation === "horizontal" ? Math.round((seg.start_main_idx + seg.end_main_idx) / 2) : Math.round(crossDim / 2), // 水平ならmainAxisCenter、垂直ならcrossDimの中心
+            y: orientation === "vertical" ? Math.round((seg.start_main_idx + seg.end_main_idx) / 2) : Math.round(crossDim / 2), // 垂直ならmainAxisCenter、水平ならcrossDimの中心
+            mainAxisCenter: Math.round((seg.start_main_idx + seg.end_main_idx) / 2), // 汎用的な中心座標
             colorName: resistorColor.name,
             rgb: avgColor,
             l: l,
-            width: segWidth,
-            chroma: chroma, // Add chroma for debugging Gold vs Body discrimination
+            width: segWidth, // mainAxis方向の幅
+            chroma: chroma,
         });
     });
 
-    return finalBands.sort((a, b) => a.x - b.x);
+    // ソートもorientationに応じて
+    return finalBands.sort((a, b) => a.mainAxisCenter - b.mainAxisCenter);
 }
 
 
@@ -844,7 +909,9 @@ async function handleEdgeDetection(request: Request, env: Env): Promise<Response
             return new Response('Invalid data', { status: 400 });
         }
 
-        const bands = extractBands(pixels, width, height, threshold, customColors);
+        const orientation = estimateOrientation(width, height); // ここで向きを推定
+
+        const bands = extractBands(pixels, width, height, threshold, orientation, customColors);
 
         // --- Refined Body Filtering ---
         // 1. Mark segments that are clearly body colors by name (case-insensitive)
@@ -880,7 +947,8 @@ async function handleEdgeDetection(request: Request, env: Env): Promise<Response
             success: true,
             bands: filteredBands,
             detected_bands: filteredBandNames,
-            resistor_value: resistorValue
+            resistor_value: resistorValue,
+            orientation: orientation // orientationをレスポンスに追加
         }), { headers: { 'Content-Type': 'application/json' } });
     } catch (e: any) {
         console.error(`[handleEdgeDetection] Error: ${e.message}`);

@@ -301,7 +301,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             window.lastEdgeDetectionResult = data;
-            renderEdgeVisualization(data.bands, canvas.width);
+            renderEdgeVisualization(data.bands, canvas.width, data.orientation, canvas.height);
             renderEdgeResult(data);
         } catch (error) {
             console.error('Error in edge detection:', error);
@@ -338,44 +338,75 @@ document.addEventListener('DOMContentLoaded', () => {
         if (timestampEl) timestampEl.textContent = `${debugData.metadata.timestamp} (${debugData.metadata.duration})`;
     }
 
-    function renderEdgeVisualization(bands, width) {
+    function renderEdgeVisualization(bands, width, orientation, height) { // orientation, height引数を追加
         const edgeOverlay = document.getElementById('edge-overlay');
         if (!edgeOverlay) return;
         edgeOverlay.innerHTML = '';
+
+        // 画像の表示領域の実際の寸法を使用
+        const targetWidth = width;
+        const targetHeight = height;
+
+
         bands.forEach(band => {
             const line = document.createElement('div');
-            line.style.cssText = `
+            let lineStyle = `
                 position: absolute;
-                left: ${(band.x / width) * 100}%;
-                transform: translateX(-50%);
-                top: 0;
-                width: 3px;
-                height: 100%;
                 background: rgb(${band.rgb.r}, ${band.rgb.g}, ${band.rgb.b});
                 box-shadow: 0 0 8px rgba(255, 255, 255, 0.8), 0 0 4px rgba(0, 0, 0, 0.5);
                 pointer-events: none;
                 z-index: 10;
             `;
-            const label = document.createElement('div');
-            label.style.cssText = `
-                position: absolute; top: 5px; left: 50%; transform: translateX(-50%);
+            let labelStyle = `
+                position: absolute;
                 background: rgba(0, 0, 0, 0.9); color: white; padding: 4px 8px;
                 border-radius: 4px; font-size: 10px; font-weight: bold; white-space: nowrap;
                 display: flex; flex-direction: column; align-items: center; gap: 2px;
             `;
+            let coordText;
+
+            if (orientation === "horizontal") {
+                lineStyle += `
+                    left: ${(band.x / targetWidth) * 100}%;
+                    transform: translateX(-50%);
+                    top: 0;
+                    width: 3px;
+                    height: 100%;
+                `;
+                labelStyle += `
+                    top: 5px; left: 50%; transform: translateX(-50%);
+                `;
+                coordText = `x: ${band.x}`;
+            } else { // vertical
+                lineStyle += `
+                    top: ${(band.y / targetHeight) * 100}%;
+                    transform: translateY(-50%);
+                    left: 0;
+                    height: 3px;
+                    width: 100%;
+                `;
+                labelStyle += `
+                    left: 5px; top: 50%; transform: translateY(-50%);
+                `;
+                coordText = `y: ${band.y}`;
+            }
+
+            line.style.cssText = lineStyle;
+            const label = document.createElement('div');
+            label.style.cssText = labelStyle;
 
             // Color name
             const colorNameSpan = document.createElement('span');
             colorNameSpan.textContent = band.colorName;
             colorNameSpan.style.cssText = 'font-size: 11px;';
 
-            // X coordinate
-            const xCoordSpan = document.createElement('span');
-            xCoordSpan.textContent = `x: ${band.x}`;
-            xCoordSpan.style.cssText = 'font-size: 9px; opacity: 0.8; color: #fbbf24;';
+            // Coordinate
+            const coordSpan = document.createElement('span');
+            coordSpan.textContent = coordText;
+            coordSpan.style.cssText = 'font-size: 9px; opacity: 0.8; color: #fbbf24;';
 
             label.appendChild(colorNameSpan);
-            label.appendChild(xCoordSpan);
+            label.appendChild(coordSpan);
             line.appendChild(label);
             edgeOverlay.appendChild(line);
         });
@@ -510,75 +541,122 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        // --- Detection Logic (Runs on a separate flat canvas) ---
         const canvas = document.createElement('canvas');
         canvas.width = currentImage.naturalWidth;
         canvas.height = currentImage.naturalHeight;
         const ctx = canvas.getContext('2d');
         ctx.drawImage(currentImage, 0, 0);
 
-        const width = canvas.width;
-        const height = canvas.height;
-        const imageData = ctx.getImageData(0, 0, width, height);
+        const imgWidth = canvas.width;
+        const imgHeight = canvas.height;
+        const imageData = ctx.getImageData(0, 0, imgWidth, imgHeight);
         const data = imageData.data;
 
-        // --- New Logic: Center-Out Search ---
-        // Assume the center of the image is the resistor.
-        const centerY = Math.floor(height / 2);
+        // --- 向きの推定 (Worker側のestimateOrientationと同様のロジック) ---
+        let orientation;
+        if (imgWidth > imgHeight * 1.5) {
+            orientation = "horizontal";
+        } else if (imgHeight > imgWidth * 1.5) {
+            orientation = "vertical";
+        } else {
+            orientation = "horizontal"; // デフォルト
+        }
 
-        const sampleHeight = Math.max(1, Math.floor(height * 0.05));
-        const sampleStartY = Math.max(0, centerY - Math.floor(sampleHeight / 2));
+        let mainDim, crossDim;
+        let mainCenter;
 
-        function getRowAverageColor(y, h = 1) {
+        if (orientation === "horizontal") {
+            mainDim = imgWidth;
+            crossDim = imgHeight;
+            mainCenter = Math.floor(imgWidth / 2);
+        } else { // vertical
+            mainDim = imgHeight;
+            crossDim = imgWidth;
+            mainCenter = Math.floor(imgHeight / 2);
+        }
+        
+        // クロス軸方向の走査範囲 (抵抗のボディ部分の平均色を捉えるため)
+        // crossDim の10%から90%の範囲
+        const crossAxisStart = Math.floor(crossDim * 0.1);
+        const crossAxisEnd = Math.floor(crossDim * 0.9);
+
+        // --- 汎用的なピクセル取得と平均色計算関数 ---
+        function getPixelColor(x, y) {
+            if (x < 0 || x >= imgWidth || y < 0 || y >= imgHeight) return { r: 0, g: 0, b: 0 };
+            const idx = (y * imgWidth + x) * 4;
+            return { r: data[idx], g: data[idx + 1], b: data[idx + 2] };
+        }
+
+        // mainCoord は走査軸方向の座標
+        // crossAxisStart/End はクロス軸方向の平均化範囲
+        function getAverageColor(mainCoord, crossStart, crossEnd) {
             let r = 0, g = 0, b = 0, count = 0;
-            const sx = Math.floor(width * 0.1);
-            const ex = Math.floor(width * 0.9);
+            if (crossStart >= crossEnd) return { r: 0, g: 0, b: 0 };
 
-            for (let cy = y; cy < y + h; cy++) {
-                if (cy >= height) break;
-                for (let x = sx; x < ex; x += 4) {
-                    const idx = (cy * width + x) * 4;
-                    r += data[idx]; g += data[idx + 1]; b += data[idx + 2];
-                    count++;
+            for (let crossCoord = crossStart; crossCoord < crossEnd; crossCoord++) {
+                let pixel;
+                if (orientation === "horizontal") {
+                    pixel = getPixelColor(mainCoord, crossCoord); // mainCoordはX、crossCoordはY
+                } else { // vertical
+                    pixel = getPixelColor(crossCoord, mainCoord); // mainCoordはY、crossCoordはX
                 }
+                r += pixel.r; g += pixel.g; b += pixel.b;
+                count++;
             }
             return count > 0 ? { r: r / count, g: g / count, b: b / count } : { r: 0, g: 0, b: 0 };
         }
 
-        const bodyColor = getRowAverageColor(sampleStartY, sampleHeight);
-        const diffThreshold = 40;
+        // ボディ色の推定（メイン軸の中心付近のクロス軸全体の平均）
+        const bodyColor = getAverageColor(mainCenter, crossAxisStart, crossAxisEnd);
 
-        function isDifferent(color1, color2) {
+        const diffThreshold = 40; // 色差の閾値
+
+        function isColorDifferent(color1, color2) {
             const diff = Math.abs(color1.r - color2.r) + Math.abs(color1.g - color2.g) + Math.abs(color1.b - color2.b);
             return diff > diffThreshold * 3;
         }
 
-        let topY = 0;
-        let bottomY = height;
+        let mainAxisStart = 0;
+        let mainAxisEnd = mainDim;
 
-        for (let y = sampleStartY; y >= 0; y -= 2) {
-            if (isDifferent(bodyColor, getRowAverageColor(y, 1))) {
-                topY = y; break;
+        // メイン軸に沿ってボディ色の境界を検出
+        for (let m = mainCenter; m >= 0; m -= 2) {
+            if (isColorDifferent(bodyColor, getAverageColor(m, crossAxisStart, crossAxisEnd))) {
+                mainAxisStart = m;
+                break;
             }
         }
-        for (let y = sampleStartY + sampleHeight; y < height; y += 2) {
-            if (isDifferent(bodyColor, getRowAverageColor(y, 1))) {
-                bottomY = y; break;
+        for (let m = mainCenter; m < mainDim; m += 2) {
+            if (isColorDifferent(bodyColor, getAverageColor(m, crossAxisStart, crossAxisEnd))) {
+                mainAxisEnd = m;
+                break;
             }
         }
 
-        const detectedHeight = bottomY - topY;
-        const padding = Math.floor(detectedHeight * 0.1);
-        let cropY = topY - padding;
-        let cropH = detectedHeight + (padding * 2);
+        const detectedLength = mainAxisEnd - mainAxisStart;
+        const padding = Math.floor(detectedLength * 0.1);
+        let cropMainStart = mainAxisStart - padding;
+        let cropMainLength = detectedLength + (padding * 2);
 
-        // Ensure the crop box is centered around the detected resistor
-        // but stays within image bounds
-        if (cropY < 0) cropY = 0;
-        if (cropY + cropH > height) cropH = height - cropY;
+        // クロップ範囲の調整
+        if (cropMainStart < 0) cropMainStart = 0;
+        if (cropMainStart + cropMainLength > mainDim) cropMainLength = mainDim - cropMainStart;
 
-        const cropData = { x: 0, y: cropY, width: width, height: cropH };
-        // Apply crop data (this preserves current zoom/pan but moves the selection box)
+        let cropX, cropY, cropWidth, cropHeight;
+
+        if (orientation === "horizontal") {
+            cropX = cropMainStart;
+            cropY = 0; // Y方向全体をクロップ
+            cropWidth = cropMainLength;
+            cropHeight = imgHeight;
+        } else { // vertical
+            cropX = 0; // X方向全体をクロップ
+            cropY = cropMainStart;
+            cropWidth = imgWidth;
+            cropHeight = cropMainLength;
+        }
+
+        const cropData = { x: cropX, y: cropY, width: cropWidth, height: cropHeight };
         cropper.setData(cropData);
 
         // Center the crop box visually without resetting zoom
